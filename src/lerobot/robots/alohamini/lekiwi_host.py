@@ -52,14 +52,14 @@ class LeKiwiHost:
 
 
 class VideoPlayer:
-    """视频播放器类，支持动态切换视频（优化版：使用播放列表实现流畅切换）"""
+    """视频播放器类，支持动态切换视频（单视频循环模式）"""
     def __init__(self, video_dir: str):
         self.video_dir = video_dir
         self.current_video_index = 0
         self.vlc_process = None
         self.stop_event = threading.Event()
+        self.switch_event = threading.Event()
         self.lock = threading.Lock()
-        self.playlist_file = None
         
         # 获取所有视频文件
         self.video_files = sorted([f for f in os.listdir(video_dir) if f.endswith('.mp4')])
@@ -67,53 +67,30 @@ class VideoPlayer:
             raise ValueError(f"No video files found in {video_dir}")
         
         print(f"[VIDEO] Found {len(self.video_files)} videos: {self.video_files}", flush=True)
-        
-        # 创建播放列表文件
-        self._create_playlist()
     
-    def _create_playlist(self):
-        """创建 M3U 播放列表文件"""
-        import tempfile
-        self.playlist_file = tempfile.NamedTemporaryFile(mode='w', suffix='.m3u', delete=False)
-        self.playlist_file.write("#EXTM3U\n")
-        for video_file in self.video_files:
-            video_path = os.path.join(self.video_dir, video_file)
-            self.playlist_file.write(f"{video_path}\n")
-        self.playlist_file.close()
-        print(f"[VIDEO] Playlist created: {self.playlist_file.name}", flush=True)
+    def get_current_video_path(self):
+        """获取当前视频的完整路径"""
+        return os.path.join(self.video_dir, self.video_files[self.current_video_index])
     
     def get_current_video_name(self):
+        """获取当前视频的文件名"""
         return self.video_files[self.current_video_index]
     
     def switch_to_next(self):
-        """切换到下一个视频（使用 DBus 控制，无需重启进程）"""
+        """切换到下一个视频"""
         with self.lock:
             old_index = self.current_video_index
             self.current_video_index = (self.current_video_index + 1) % len(self.video_files)
             print(f"[VIDEO] Switching to next: {self.current_video_index + 1}/{len(self.video_files)}: {self.video_files[self.current_video_index]}", flush=True)
-            self._send_dbus_command("Next")
+            self.switch_event.set()
     
     def switch_to_previous(self):
-        """切换到上一个视频（使用 DBus 控制，无需重启进程）"""
+        """切换到上一个视频"""
         with self.lock:
             old_index = self.current_video_index
             self.current_video_index = (self.current_video_index - 1) % len(self.video_files)
             print(f"[VIDEO] Switching to previous: {self.current_video_index + 1}/{len(self.video_files)}: {self.video_files[self.current_video_index]}", flush=True)
-            self._send_dbus_command("Previous")
-    
-    def _send_dbus_command(self, command):
-        """通过 DBus 发送控制命令到 VLC"""
-        try:
-            # 使用 dbus-send 命令控制 VLC
-            subprocess.run([
-                "dbus-send",
-                "--type=method_call",
-                "--dest=org.mpris.MediaPlayer2.vlc",
-                "/org/mpris/MediaPlayer2",
-                f"org.mpris.MediaPlayer2.Player.{command}"
-            ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5)
-        except Exception as e:
-            print(f"[VIDEO] DBus command failed: {e}", flush=True)
+            self.switch_event.set()
     
     def _stop_current_vlc(self):
         """停止当前VLC进程"""
@@ -126,18 +103,16 @@ class VideoPlayer:
                 print(f"[VIDEO] VLC didn't terminate, killing...", flush=True)
                 self.vlc_process.kill()
     
-    def _start_vlc_with_playlist(self):
-        """启动VLC播放整个播放列表"""
+    def _start_vlc_single_video(self, video_path):
+        """启动VLC播放单个视频（循环播放）"""
         vlc_cmd = [
             "cvlc",
             "--fullscreen",
-            "--loop",
+            "--loop",  # 循环播放当前视频
             "--no-video-title-show",
             "--no-osd",
             "--quiet",
-            "--no-random",
-            "--playlist-autostart",
-            self.playlist_file.name
+            video_path
         ]
         
         self.vlc_process = subprocess.Popen(
@@ -146,31 +121,38 @@ class VideoPlayer:
             stderr=subprocess.DEVNULL,
             env={**os.environ, 'DISPLAY': os.environ.get('DISPLAY', ':0')}
         )
-        print(f"[VIDEO] VLC started with playlist (PID: {self.vlc_process.pid})", flush=True)
-        
-        # 等待 VLC 启动并跳转到初始视频
-        time.sleep(1.5)
-        if self.current_video_index > 0:
-            for _ in range(self.current_video_index):
-                self._send_dbus_command("Next")
-                time.sleep(0.1)
+        print(f"[VIDEO] VLC started (PID: {self.vlc_process.pid}): {os.path.basename(video_path)}", flush=True)
     
     def run(self):
-        """视频播放主循环（优化版：一次启动，DBus 控制切换）"""
-        print(f"[VIDEO] Player thread started (optimized mode)", flush=True)
+        """视频播放主循环（单视频循环模式）"""
+        print(f"[VIDEO] Player thread started (single video loop mode)", flush=True)
         
         try:
-            # 启动 VLC 播放列表（只启动一次）
-            self._start_vlc_with_playlist()
-            
-            # 保持运行，监控 VLC 进程
             while not self.stop_event.is_set():
-                # 检查VLC是否还在运行
-                if self.vlc_process.poll() is not None:
-                    print(f"[VIDEO] VLC exited unexpectedly, restarting...", flush=True)
-                    self._start_vlc_with_playlist()
+                # 获取当前视频路径
+                video_path = self.get_current_video_path()
                 
-                time.sleep(0.5)
+                if not os.path.exists(video_path):
+                    print(f"[VIDEO ERROR] Video not found: {video_path}", flush=True)
+                    time.sleep(1)
+                    continue
+                
+                # 启动VLC播放当前视频（循环播放）
+                self._start_vlc_single_video(video_path)
+                
+                # 等待切换事件或停止事件
+                while not self.stop_event.is_set() and not self.switch_event.is_set():
+                    # 检查VLC是否还在运行
+                    if self.vlc_process.poll() is not None:
+                        print(f"[VIDEO] VLC exited unexpectedly, restarting...", flush=True)
+                        break
+                    time.sleep(0.1)
+                
+                # 停止当前VLC
+                self._stop_current_vlc()
+                
+                # 清除切换事件标志
+                self.switch_event.clear()
             
             print(f"[VIDEO] Player stopped", flush=True)
             
@@ -183,14 +165,6 @@ class VideoPlayer:
         print(f"[VIDEO] Stopping player...", flush=True)
         self.stop_event.set()
         self._stop_current_vlc()
-        
-        # 清理播放列表文件
-        if self.playlist_file and os.path.exists(self.playlist_file.name):
-            try:
-                os.unlink(self.playlist_file.name)
-                print(f"[VIDEO] Playlist file cleaned up", flush=True)
-            except Exception as e:
-                print(f"[VIDEO] Failed to clean up playlist: {e}", flush=True)
  
 
 def main():
