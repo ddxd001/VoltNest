@@ -24,6 +24,25 @@ cd "$RECORDER_DIR"
 echo -e "${GREEN}📁 工作目录: $RECORDER_DIR${NC}"
 echo ""
 
+# 检测并激活 Conda 环境
+if command -v conda &> /dev/null; then
+    echo -e "${YELLOW}🔄 激活虚拟环境: lerobot_alohamini${NC}"
+    source $(conda info --base)/etc/profile.d/conda.sh
+    conda activate lerobot_alohamini
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ 错误: 无法激活环境 lerobot_alohamini${NC}"
+        echo -e "${YELLOW}请先创建环境或检查环境名称${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ 虚拟环境已激活${NC}"
+    echo ""
+else
+    echo -e "${YELLOW}⚠️  警告: 未找到 conda，使用系统 Python${NC}"
+    echo ""
+fi
+
 # 检查配置文件
 if [ ! -f "config.yaml" ]; then
     echo -e "${RED}❌ 错误: 配置文件不存在 (config.yaml)${NC}"
@@ -34,8 +53,8 @@ echo -e "${GREEN}✅ 配置文件已找到${NC}"
 echo ""
 
 # 检查 Python
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}❌ 错误: 未找到 python3${NC}"
+if ! command -v python &> /dev/null; then
+    echo -e "${RED}❌ 错误: 未找到 python${NC}"
     exit 1
 fi
 
@@ -44,16 +63,16 @@ echo ""
 
 # 检查依赖
 echo -e "${YELLOW}🔍 检查依赖...${NC}"
-if ! python3 -c "import cv2" &> /dev/null; then
+if ! python -c "import cv2" &> /dev/null; then
     echo -e "${YELLOW}⚠️  警告: opencv-python 未安装${NC}"
     echo -e "${YELLOW}正在安装依赖...${NC}"
-    pip3 install -r requirements.txt
+    pip install -r requirements.txt
 fi
 
-if ! python3 -c "import yaml" &> /dev/null; then
+if ! python -c "import yaml" &> /dev/null; then
     echo -e "${YELLOW}⚠️  警告: pyyaml 未安装${NC}"
     echo -e "${YELLOW}正在安装依赖...${NC}"
-    pip3 install -r requirements.txt
+    pip install -r requirements.txt
 fi
 
 echo -e "${GREEN}✅ 依赖已安装${NC}"
@@ -73,7 +92,7 @@ echo "  - 录制文件保存在 recordings/ 目录"
 echo ""
 
 # 运行录制程序
-python3 src/camera_recorder.py
+python src/camera_recorder.py
 
 # 程序结束
 echo ""
