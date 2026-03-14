@@ -1,0 +1,28 @@
+# 录制的视频文件
+recordings/*.mp4
+recordings/*.avi
+recordings/*.mov
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+.DS_Store

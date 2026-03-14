@@ -1,0 +1,18 @@
+# 摄像头录制配置文件
+
+camera:
+  device_id: 0              # 摄像头设备 ID（0=/dev/video0, 1=/dev/video1, ...）
+  width: 1280               # 分辨率宽度
+  height: 720               # 分辨率高度
+  fps: 30                   # 帧率
+
+recording:
+  output_dir: "./recordings"  # 录制文件保存目录（相对于 camera_recorder 目录）
+  codec: "mp4v"              # 视频编码（mp4v, XVID, H264, avc1）
+  file_prefix: "recording"   # 文件名前缀
+  
+# 可选：高级设置
+advanced:
+  buffer_size: 10           # 帧缓冲大小
+  auto_restart: false       # 摄像头断开时自动重启
+  log_level: "INFO"         # 日志级别（DEBUG, INFO, WARNING, ERROR）
