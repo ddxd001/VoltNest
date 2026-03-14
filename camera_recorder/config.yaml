@@ -8,7 +8,7 @@ camera:
 
 recording:
   output_dir: "./recordings"  # 录制文件保存目录（相对于 camera_recorder 目录）
-  codec: "H264"              # 视频编码（mp4v, XVID, H264, avc1）
+  codec: "MJPG"              # 视频编码（MJPG推荐用于树莓派，mp4v, XVID也可用）
   file_prefix: "recording"   # 文件名前缀
   
 # 可选：高级设置

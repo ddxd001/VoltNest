@@ -9,7 +9,7 @@ set -e
 AUTO_UPDATE=true
 
 # 摄像头录制开关：true=启用录制，false=禁用录制
-ENABLE_CAMERA_RECORDING=false
+ENABLE_CAMERA_RECORDING=true
 # ================================= #
 
 # 颜色定义
