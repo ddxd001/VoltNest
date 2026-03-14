@@ -7,6 +7,9 @@ set -e
 # ============ 配置选项 ============ #
 # 自动更新开关：true=启用自动更新，false=禁用自动更新
 AUTO_UPDATE=true
+
+# 摄像头录制开关：true=启用录制，false=禁用录制
+ENABLE_CAMERA_RECORDING=false
 # ================================= #
 
 # 颜色定义
@@ -108,6 +111,42 @@ else
 fi
 
 echo ""
+
+# 启动摄像头录制（如果启用）
+RECORDER_PID=""
+if [ "$ENABLE_CAMERA_RECORDING" = true ]; then
+    echo -e "${BLUE}================================================${NC}"
+    echo -e "${BLUE}  启动摄像头录制${NC}"
+    echo -e "${BLUE}================================================${NC}"
+    echo ""
+    
+    # 检查录制模块是否存在
+    if [ -d "camera_recorder" ] && [ -f "camera_recorder/scripts/start_recorder.sh" ]; then
+        echo -e "${YELLOW}📹 启动摄像头录制（后台运行）...${NC}"
+        
+        # 后台启动录制程序
+        cd camera_recorder
+        nohup ./scripts/start_recorder.sh > recorder.log 2>&1 &
+        RECORDER_PID=$!
+        cd "$SCRIPT_DIR"
+        
+        # 等待录制程序启动
+        sleep 2
+        
+        # 检查录制程序是否成功启动
+        if ps -p $RECORDER_PID > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ 摄像头录制已启动 (PID: $RECORDER_PID)${NC}"
+            echo -e "${GREEN}   录制日志: camera_recorder/recorder.log${NC}"
+        else
+            echo -e "${RED}⚠️  摄像头录制启动失败，请检查日志${NC}"
+            RECORDER_PID=""
+        fi
+    else
+        echo -e "${YELLOW}⚠️  未找到摄像头录制模块，跳过录制${NC}"
+    fi
+    echo ""
+fi
+
 echo -e "${BLUE}================================================${NC}"
 echo -e "${BLUE}  启动从臂控制服务${NC}"
 echo -e "${BLUE}================================================${NC}"
@@ -117,14 +156,41 @@ echo "  - 机械臂类型: so-arm-5dof"
 echo "  - 监听端口: 5555 (命令), 5556 (观测)"
 echo "  - 控制频率: 30 Hz"
 echo "  - 看门狗超时: 1500 ms"
+if [ "$ENABLE_CAMERA_RECORDING" = true ] && [ -n "$RECORDER_PID" ]; then
+    echo "  - 摄像头录制: 已启用 (PID: $RECORDER_PID)"
+fi
 echo ""
 echo -e "${YELLOW}⚠️  注意事项：${NC}"
 echo "  1. 确保从臂已上电"
 echo "  2. 确保串口连接正常"
 echo "  3. 等待 Mac 端连接后开始遥操作"
+if [ "$ENABLE_CAMERA_RECORDING" = true ] && [ -n "$RECORDER_PID" ]; then
+    echo "  4. 摄像头正在录制，停止服务时录制也会自动停止"
+fi
 echo ""
 echo -e "${YELLOW}按 Ctrl+C 停止服务${NC}"
 echo ""
+
+# 定义清理函数
+cleanup() {
+    echo ""
+    echo -e "${YELLOW}正在停止服务...${NC}"
+    
+    # 停止摄像头录制
+    if [ -n "$RECORDER_PID" ]; then
+        echo -e "${YELLOW}停止摄像头录制...${NC}"
+        kill -SIGINT $RECORDER_PID 2>/dev/null || true
+        sleep 1
+        # 如果进程还在运行，强制终止
+        if ps -p $RECORDER_PID > /dev/null 2>&1; then
+            kill -SIGKILL $RECORDER_PID 2>/dev/null || true
+        fi
+        echo -e "${GREEN}✅ 摄像头录制已停止${NC}"
+    fi
+}
+
+# 注册清理函数
+trap cleanup EXIT INT TERM
 
 # 运行从臂服务
 python -m lerobot.robots.alohamini.lekiwi_host \
