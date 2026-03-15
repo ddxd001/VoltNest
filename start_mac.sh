@@ -112,7 +112,7 @@ fi
 
 # 检查网络连接
 echo -e "${YELLOW}🌐 检查树莓派网络连接...${NC}"
-REMOTE_IP="192.168.3.33"
+REMOTE_IP="192.168.2.119"
 
 if ping -c 1 -W 1 $REMOTE_IP &> /dev/null; then
     echo -e "${GREEN}✅ 树莓派在线 ($REMOTE_IP)${NC}"
