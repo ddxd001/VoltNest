@@ -290,6 +290,7 @@ class AudioPlayer:
     def __init__(self, audio_dir: str):
         self.audio_dir = Path(audio_dir).expanduser().resolve()
         self.process: subprocess.Popen | None = None
+        self._set_system_volume_max()
 
     def _resolve_audio_file(self, file_name: str) -> Path | None:
         p = Path(file_name)
@@ -314,18 +315,40 @@ class AudioPlayer:
                 self.process.kill()
         self.process = None
 
+    def _set_system_volume_max(self) -> None:
+        """Best-effort: maximize output volume on Raspberry Pi."""
+        commands = [
+            ["amixer", "-q", "sset", "Master", "100%", "unmute"],
+            ["amixer", "-q", "sset", "PCM", "100%", "unmute"],
+            ["amixer", "-q", "sset", "Speaker", "100%", "unmute"],
+        ]
+        for cmd in commands:
+            try:
+                subprocess.run(
+                    cmd,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=0.5,
+                )
+            except Exception:
+                pass
+
     def play(self, file_name: str) -> tuple[bool, str]:
         target = self._resolve_audio_file(file_name)
         if target is None:
             return False, f"Audio file not found or not allowed: {file_name}"
 
         self.stop()
+        self._set_system_volume_max()
         try:
             self.process = subprocess.Popen(
                 [
                     "ffplay",
                     "-nodisp",
                     "-autoexit",
+                    "-volume",
+                    "100",
                     "-loglevel",
                     "error",
                     str(target),

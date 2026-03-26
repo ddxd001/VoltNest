@@ -114,7 +114,7 @@ fi
 
 # 检查网络连接
 echo -e "${YELLOW}🌐 检查树莓派网络连接...${NC}"
-REMOTE_IP="192.168.2.119"
+REMOTE_IP="192.168.3.33"
 API_HTTP_HOST="127.0.0.1"
 API_HTTP_PORT="8000"
 
