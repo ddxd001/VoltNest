@@ -33,6 +33,14 @@ from .lekiwi import LeKiwi
 
 _BASE_KEYS = ("x.vel", "y.vel", "theta.vel")
 _ARB_META_KEYS = ("__source", "__base_claim", "__base_release", "__base_lease_ms", "__base_priority")
+_LEFT_ARM_KEYS = (
+    "arm_left_shoulder_pan.pos",
+    "arm_left_shoulder_lift.pos",
+    "arm_left_elbow_flex.pos",
+    "arm_left_wrist_flex.pos",
+    "arm_left_wrist_roll.pos",
+    "arm_left_gripper.pos",
+)
 _RIGHT_ARM_KEYS = (
     "arm_right_shoulder_pan.pos",
     "arm_right_shoulder_lift.pos",
@@ -41,6 +49,7 @@ _RIGHT_ARM_KEYS = (
     "arm_right_wrist_roll.pos",
     "arm_right_gripper.pos",
 )
+_BOTH_ARM_KEYS = _LEFT_ARM_KEYS + _RIGHT_ARM_KEYS
 
 
 class BaseControlArbitrator:
@@ -373,7 +382,7 @@ class AudioPlayer:
 
 
 class GestureController:
-    """Generate predefined right-arm gestures locally on Pi side."""
+    """Generate predefined mirrored dual-arm gestures locally on Pi side."""
 
     def __init__(self) -> None:
         self.active = False
@@ -387,24 +396,28 @@ class GestureController:
     def _lerp_pose(self, a: dict[str, float], b: dict[str, float], alpha: float) -> dict[str, float]:
         alpha = max(0.0, min(1.0, alpha))
         out: dict[str, float] = {}
-        for k in _RIGHT_ARM_KEYS:
+        for k in _BOTH_ARM_KEYS:
             out[k] = float(a.get(k, 0.0) + (b.get(k, 0.0) - a.get(k, 0.0)) * alpha)
         return out
 
     def _build_raised_pose(self, base: dict[str, float]) -> dict[str, float]:
         pose = dict(base)
-        # Conservative deltas to avoid aggressive motion.
+        # Apply same amplitude on both arms; mirror is handled in pan oscillation.
+        pose["arm_left_shoulder_lift.pos"] = base["arm_left_shoulder_lift.pos"] + 7.0
+        pose["arm_left_elbow_flex.pos"] = base["arm_left_elbow_flex.pos"] - 40.0
+        pose["arm_left_wrist_flex.pos"] = base["arm_left_wrist_flex.pos"] + 5.0
+
         pose["arm_right_shoulder_lift.pos"] = base["arm_right_shoulder_lift.pos"] + 7.0
         pose["arm_right_elbow_flex.pos"] = base["arm_right_elbow_flex.pos"] - 40.0
         pose["arm_right_wrist_flex.pos"] = base["arm_right_wrist_flex.pos"] + 5.0
         return pose
 
     def start_greet(self, observation: dict, waves: int = 2, speed_scale: float = 1.0) -> tuple[bool, str]:
-        missing = [k for k in _RIGHT_ARM_KEYS if k not in observation]
+        missing = [k for k in _BOTH_ARM_KEYS if k not in observation]
         if missing:
-            return False, f"Missing right-arm observation keys: {missing[:2]}"
+            return False, f"Missing arm observation keys: {missing[:2]}"
 
-        self.base_pose = {k: float(observation[k]) for k in _RIGHT_ARM_KEYS}
+        self.base_pose = {k: float(observation[k]) for k in _BOTH_ARM_KEYS}
         self.raised_pose = self._build_raised_pose(self.base_pose)
         self.waves = max(1, min(int(waves), 6))
         self.speed_scale = max(0.3, min(float(speed_scale), 3.0))
@@ -435,9 +448,12 @@ class GestureController:
 
         if t < raise_dur + wave_dur:
             tau = t - raise_dur
-            # Oscillate shoulder pan around raised pose.
+            # Mirror pan oscillation: left/right move opposite directions.
             phase = 2.0 * 3.1415926 * (tau / wave_period)
             pose = dict(self.raised_pose)
+            pose["arm_left_shoulder_pan.pos"] = self.raised_pose["arm_left_shoulder_pan.pos"] - self.wave_amplitude_deg * math.sin(
+                phase
+            )
             pose["arm_right_shoulder_pan.pos"] = self.raised_pose["arm_right_shoulder_pan.pos"] + self.wave_amplitude_deg * math.sin(
                 phase
             )
