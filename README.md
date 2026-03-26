@@ -7,6 +7,7 @@
 - [快速启动](#快速启动)
 - [完整安装指南](#完整安装指南)
 - [常用指令](#常用指令)
+- [HTTP API 控制](#http-api-控制)
 - [视频切换功能](#视频切换功能)
 - [摄像头录制功能](#摄像头录制功能)
 - [自动更新功能](#自动更新功能)
@@ -320,6 +321,81 @@ python examples/alohamini/evaluate_bi.py \
 
 ---
 
+## HTTP API 控制
+
+VoltNest 支持在不使用主臂遥操输入的情况下，通过 HTTP 接口直接控制底盘、升降、音频和手势。
+
+### 1) 启动 API
+
+推荐使用 `start_mac.sh`（已自动拉起 API），或单独启动：
+
+```bash
+python examples/alohamini/base_control_api.py \
+  --remote_ip 192.168.3.33 \
+  --http_host 127.0.0.1 \
+  --http_port 8000
+```
+
+### 2) 常用接口
+
+#### 底盘移动
+
+```bash
+curl -X POST http://127.0.0.1:8000/move \
+  -H "Content-Type: application/json" \
+  -d '{"x":0.2,"y":0,"theta":0}'
+```
+
+#### 底盘停止
+
+```bash
+curl -X POST http://127.0.0.1:8000/stop
+```
+
+#### 升降轴（速度控制）
+
+```bash
+# 上升
+curl -X POST http://127.0.0.1:8000/lift \
+  -H "Content-Type: application/json" \
+  -d '{"direction":"up","speed":600}'
+
+# 停止升降
+curl -X POST http://127.0.0.1:8000/lift \
+  -H "Content-Type: application/json" \
+  -d '{"stop":true}'
+```
+
+#### 音频播放/停止
+
+```bash
+curl -X POST http://127.0.0.1:8000/audio/play \
+  -H "Content-Type: application/json" \
+  -d '{"file":"welcome/ttsmaker-file-2026-3-26-20-6-31.mp3"}'
+
+curl -X POST http://127.0.0.1:8000/audio/stop
+```
+
+#### 手势打招呼（双臂镜像）
+
+```bash
+curl -X POST http://127.0.0.1:8000/gesture/greet \
+  -H "Content-Type: application/json" \
+  -d '{"waves":2,"speed_scale":1.0}'
+
+curl -X POST http://127.0.0.1:8000/gesture/stop
+```
+
+#### 状态查询
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+> 更完整的接口说明见：`API文档.md`
+
+---
+
 ## 常用指令
 
 ### 校准指令
@@ -625,6 +701,7 @@ conda activate lerobot_alohamini
 - ✅ 自动更新功能
 - ✅ 更好的错误处理
 - ✅ 单视频循环播放模式
+- ✅ HTTP API 控制（底盘/升降/音频/双臂镜像手势）
 
 ---
 

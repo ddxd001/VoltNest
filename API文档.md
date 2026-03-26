@@ -1,6 +1,6 @@
-# VoltNest 控制 API 文档
+# AlohaMini 控制 API 文档
 
-本文档基于 VoltNest 当前实现，说明如何通过 HTTP API 控制机器人底盘、升降轴以及音频播放。
+本文档基于当前项目实现，说明如何通过 HTTP API 控制 AlohaMini 的底盘、升降轴以及音频播放。
 
 ## 服务概览
 
@@ -160,38 +160,11 @@ curl -X POST http://127.0.0.1:8000/audio/play \
 curl -X POST http://127.0.0.1:8000/audio/stop
 ```
 
----
-
-### 5) 手势控制（双臂镜像打招呼）
-
-#### `POST /gesture/greet`
-
-触发机器人左右臂镜像挥手动作（无需遥操作主臂）。
-
-```bash
-curl -X POST http://127.0.0.1:8000/gesture/greet \
-  -H "Content-Type: application/json" \
-  -d '{"waves":2,"speed_scale":1.0}'
-```
-
-参数说明：
-
-- `waves`：挥手次数，默认 `2`
-- `speed_scale`：动作速度倍率，默认 `1.0`（越大越快）
-
-#### `POST /gesture/stop`
-
-中断当前手势动作。
-
-```bash
-curl -X POST http://127.0.0.1:8000/gesture/stop
-```
-
 ## 音频文件路径规则
 
-Pi 端音频目录默认位于项目根目录下：
+Pi 端音频目录固定为：
 
-`<项目根目录>/audio`
+`/home/ubuntu/lerobot_alohamini/audio`
 
 `/audio/play` 的 `file` 建议使用相对路径（相对于上面的目录）：
 
@@ -212,7 +185,6 @@ Pi 端音频目录默认位于项目根目录下：
 
 - 底盘控制是持续发送机制，未调用 `/stop` 前会保持当前速度。
 - 升降也是持续速度控制，未发送 `{"stop":true}` 前会持续运动。
-- 手势控制在 Pi 端本地执行，不依赖遥操主臂持续输入。
 - 如需把底盘交回键盘控制，请调用 `/release`。
 - 音频播放依赖 `ffplay`（通常来自 `ffmpeg`）。若未安装，播放会失败。
 
