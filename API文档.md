@@ -123,14 +123,6 @@ curl -X POST http://127.0.0.1:8000/lift \
   -d '{"direction":"down","speed":600}'
 ```
 
-直接指定速度（正值上升，负值下降）：
-
-```bash
-curl -X POST http://127.0.0.1:8000/lift \
-  -H "Content-Type: application/json" \
-  -d '{"velocity":-450}'
-```
-
 停止升降（速度置 0）：
 
 ```bash
