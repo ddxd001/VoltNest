@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""
+HTTP control interface for AlohaMini base (chassis) movement.
+
+This script runs on the Mac side and reuses the existing ZMQ protocol:
+Mac -> (ZMQ PUSH) -> Pi host -> LeKiwi base motors
+
+Why we need a background sender:
+The Pi host has a watchdog (default ~1.5s). If commands stop arriving, the base is stopped.
+So we continuously publish the latest base velocity command at a fixed rate.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import sys
+from typing import Any, TYPE_CHECKING
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC_DIR = _REPO_ROOT / "src"
+if str(_SRC_DIR) not in sys.path:
+    # Allow running this script without `pip install -e .`
+    sys.path.insert(0, str(_SRC_DIR))
+
+if TYPE_CHECKING:
+    from lerobot.robots.alohamini import LeKiwiClient
+
+
+class _SharedState:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.x_vel_mps: float = 0.0
+        self.y_vel_mps: float = 0.0
+        self.theta_vel_degps: float = 0.0
+        self.last_update_s: float = time.time()
+        self.control_active: bool = False
+        self.release_once: bool = False
+
+    def set_cmd(self, x: float, y: float, theta: float, active: bool = True) -> None:
+        with self._lock:
+            self.x_vel_mps = float(x)
+            self.y_vel_mps = float(y)
+            self.theta_vel_degps = float(theta)
+            self.last_update_s = time.time()
+            self.control_active = bool(active)
+            self.release_once = False
+
+    def stop_cmd(self) -> None:
+        with self._lock:
+            self.x_vel_mps = 0.0
+            self.y_vel_mps = 0.0
+            self.theta_vel_degps = 0.0
+            self.last_update_s = time.time()
+            self.control_active = True
+            self.release_once = False
+
+    def release_control(self) -> None:
+        with self._lock:
+            self.x_vel_mps = 0.0
+            self.y_vel_mps = 0.0
+            self.theta_vel_degps = 0.0
+            self.last_update_s = time.time()
+            self.control_active = False
+            self.release_once = True
+
+    def consume_sender_state(self) -> tuple[float, float, float, float, bool, bool]:
+        with self._lock:
+            do_release = self.release_once
+            if self.release_once:
+                self.release_once = False
+            return (
+                float(self.x_vel_mps),
+                float(self.y_vel_mps),
+                float(self.theta_vel_degps),
+                float(self.last_update_s),
+                bool(self.control_active),
+                bool(do_release),
+            )
+
+    def snapshot(self) -> tuple[float, float, float, float, bool]:
+        with self._lock:
+            return (
+                float(self.x_vel_mps),
+                float(self.y_vel_mps),
+                float(self.theta_vel_degps),
+                float(self.last_update_s),
+                bool(self.control_active),
+            )
+
+
+def _parse_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    if length <= 0:
+        return {}
+    raw = handler.rfile.read(length)
+    if not raw:
+        return {}
+    return json.loads(raw.decode("utf-8"))
+
+
+def _write_json(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
+    body = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args: Any) -> None:
+            # Keep stdout clean; override if you want access logs.
+            return
+
+        def do_GET(self) -> None:
+            if self.path.rstrip("/") in ("", "/health", "/status"):
+                x, y, th, ts, active = state.snapshot()
+                _write_json(
+                    self,
+                    200,
+                    {
+                        "ok": True,
+                        "cmd": {"x_vel": x, "y_vel": y, "theta_vel": th},
+                        "last_update_s": ts,
+                        "control_active": active,
+                    },
+                )
+                return
+
+            _write_json(self, 404, {"ok": False, "error": "not_found"})
+
+        def do_POST(self) -> None:
+            try:
+                if self.path.rstrip("/") == "/move":
+                    data = _parse_json_body(self)
+                    # Accept either x/y/theta or x_vel/y_vel/theta_vel.
+                    x = data.get("x", data.get("x_vel", 0.0))
+                    y = data.get("y", data.get("y_vel", 0.0))
+                    th = data.get("theta", data.get("theta_vel", 0.0))
+                    state.set_cmd(x, y, th, active=True)
+                    _write_json(self, 200, {"ok": True})
+                    return
+
+                if self.path.rstrip("/") == "/stop":
+                    state.stop_cmd()
+                    _write_json(self, 200, {"ok": True})
+                    return
+
+                if self.path.rstrip("/") == "/release":
+                    state.release_control()
+                    _write_json(self, 200, {"ok": True})
+                    return
+
+                _write_json(self, 404, {"ok": False, "error": "not_found"})
+            except json.JSONDecodeError:
+                _write_json(self, 400, {"ok": False, "error": "invalid_json"})
+            except Exception as e:
+                _write_json(self, 500, {"ok": False, "error": str(e)})
+
+    return Handler
+
+
+def _sender_loop(
+    robot: "LeKiwiClient",
+    state: _SharedState,
+    send_hz: float,
+    stop_event: threading.Event,
+    source: str,
+    lease_ms: int,
+    priority: int,
+) -> None:
+    period_s = 1.0 / max(send_hz, 1e-6)
+    while not stop_event.is_set():
+        t0 = time.perf_counter()
+        x, y, th, _ts, active, do_release = state.consume_sender_state()
+        if active:
+            robot.send_action(
+                {
+                    "x.vel": x,
+                    "y.vel": y,
+                    "theta.vel": th,
+                    "__source": source,
+                    "__base_claim": True,
+                    "__base_lease_ms": int(lease_ms),
+                    "__base_priority": int(priority),
+                }
+            )
+        elif do_release:
+            robot.send_action(
+                {
+                    "x.vel": 0.0,
+                    "y.vel": 0.0,
+                    "theta.vel": 0.0,
+                    "__source": source,
+                    "__base_release": True,
+                    "__base_priority": int(priority),
+                }
+            )
+        dt = time.perf_counter() - t0
+        time.sleep(max(period_s - dt, 0.0))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="AlohaMini base HTTP control API (Mac side).")
+    ap.add_argument("--remote_ip", type=str, required=True, help="Pi host IP address")
+    ap.add_argument("--http_host", type=str, default="127.0.0.1", help="HTTP bind host")
+    ap.add_argument("--http_port", type=int, default=8000, help="HTTP bind port")
+    ap.add_argument("--send_hz", type=float, default=20.0, help="ZMQ command publish rate (Hz)")
+    ap.add_argument("--source", type=str, default="api_http", help="Arbitration source id")
+    ap.add_argument("--lease_ms", type=int, default=1200, help="Arbitration lease timeout in ms")
+    ap.add_argument("--priority", type=int, default=100, help="Arbitration priority (higher wins)")
+    args = ap.parse_args()
+
+    # Delay heavy imports so `-h` works even if deps aren't installed yet.
+    from lerobot.robots.alohamini import LeKiwiClient, LeKiwiClientConfig
+
+    robot = LeKiwiClient(LeKiwiClientConfig(remote_ip=args.remote_ip, id="base_control_api"))
+    robot.connect()
+
+    state = _SharedState()
+    stop_event = threading.Event()
+    sender = threading.Thread(
+        target=_sender_loop,
+        args=(
+            robot,
+            state,
+            float(args.send_hz),
+            stop_event,
+            str(args.source),
+            int(args.lease_ms),
+            int(args.priority),
+        ),
+        daemon=True,
+    )
+    sender.start()
+
+    server = ThreadingHTTPServer((args.http_host, int(args.http_port)), make_handler(state))
+    try:
+        print(f"Base control API listening on http://{args.http_host}:{args.http_port}")
+        print("Endpoints: GET /health, POST /move, POST /stop, POST /release")
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_event.set()
+        try:
+            server.shutdown()
+        except Exception:
+            pass
+        try:
+            # Best-effort stop before disconnect.
+            state.stop_cmd()
+            time.sleep(0.05)
+            robot.disconnect()
+        except Exception:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

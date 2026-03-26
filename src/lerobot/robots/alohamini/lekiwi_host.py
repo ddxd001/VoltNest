@@ -29,6 +29,96 @@ import zmq
 from .config_lekiwi import LeKiwiConfig, LeKiwiHostConfig
 from .lekiwi import LeKiwi
 
+_BASE_KEYS = ("x.vel", "y.vel", "theta.vel")
+_ARB_META_KEYS = ("__source", "__base_claim", "__base_release", "__base_lease_ms", "__base_priority")
+
+
+class BaseControlArbitrator:
+    """Arbitrate who can command base velocity keys in multi-client scenarios."""
+
+    def __init__(self, default_lease_ms: int = 1200, default_priority: int = 10):
+        self.default_lease_ms = int(default_lease_ms)
+        self.default_priority = int(default_priority)
+        self.owner_source: str | None = None
+        self.owner_priority: int = self.default_priority
+        self.owner_expire_at: float = 0.0
+
+    def _clear_owner(self) -> None:
+        self.owner_source = None
+        self.owner_priority = self.default_priority
+        self.owner_expire_at = 0.0
+
+    def _check_owner_expired(self, now: float) -> None:
+        if self.owner_source is not None and now >= self.owner_expire_at:
+            logging.info("[ARB] Base owner '%s' lease expired", self.owner_source)
+            self._clear_owner()
+
+    def _pick_meta(self, data: dict) -> tuple[str, bool, bool, int, int]:
+        source = str(data.get("__source", "teleop"))
+        claim = bool(data.get("__base_claim", False))
+        release = bool(data.get("__base_release", False))
+        lease_ms = int(data.get("__base_lease_ms", self.default_lease_ms))
+        priority = int(data.get("__base_priority", self.default_priority))
+        if lease_ms <= 0:
+            lease_ms = self.default_lease_ms
+        return source, claim, release, lease_ms, priority
+
+    def _strip_meta(self, data: dict) -> dict:
+        return {k: v for k, v in data.items() if k not in _ARB_META_KEYS}
+
+    def filter_action(self, data: dict) -> dict:
+        """Return action with unauthorized base keys removed, then meta keys stripped."""
+        now = time.time()
+        self._check_owner_expired(now)
+        source, claim, release, lease_ms, priority = self._pick_meta(data)
+        has_base_cmd = any(k in data for k in _BASE_KEYS)
+
+        if release and self.owner_source == source:
+            logging.info("[ARB] '%s' released base control", source)
+            self._clear_owner()
+
+        if not has_base_cmd:
+            return self._strip_meta(data)
+
+        allow_base = False
+        if self.owner_source is None:
+            allow_base = True
+            if claim:
+                self.owner_source = source
+                self.owner_priority = priority
+                self.owner_expire_at = now + lease_ms / 1000.0
+                logging.info(
+                    "[ARB] '%s' acquired base control (priority=%s, lease_ms=%s)",
+                    source,
+                    priority,
+                    lease_ms,
+                )
+        elif self.owner_source == source:
+            allow_base = True
+            if claim:
+                self.owner_expire_at = now + lease_ms / 1000.0
+                self.owner_priority = priority
+        elif claim and priority > self.owner_priority:
+            logging.info(
+                "[ARB] '%s' preempted '%s' for base control (priority %s > %s)",
+                source,
+                self.owner_source,
+                priority,
+                self.owner_priority,
+            )
+            self.owner_source = source
+            self.owner_priority = priority
+            self.owner_expire_at = now + lease_ms / 1000.0
+            allow_base = True
+        else:
+            allow_base = False
+
+        out = self._strip_meta(data)
+        if not allow_base:
+            for k in _BASE_KEYS:
+                out.pop(k, None)
+        return out
+
 
 class LeKiwiHost:
     def __init__(self, config: LeKiwiHostConfig):
@@ -214,6 +304,7 @@ def main():
 
     video_player = None
     video_thread = None
+    arbitrator = BaseControlArbitrator(default_lease_ms=1200, default_priority=10)
     
     if host_config.enable_video_playback and host_config.video_path:
         print(f"[MAIN] Starting video player thread...", flush=True)
@@ -246,6 +337,7 @@ def main():
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
+                data = arbitrator.filter_action(data)
                 
                 # 检查是否有视频切换命令
                 if video_player:
@@ -254,6 +346,10 @@ def main():
                     elif "video_prev" in data and data["video_prev"]:
                         video_player.switch_to_previous()
                 
+                # Ensure base keys exist to satisfy robot.send_action() assumptions.
+                for k in _BASE_KEYS:
+                    data.setdefault(k, 0.0)
+
                 # 发送动作到机器人
                 _action_sent = robot.send_action(data)
                 
