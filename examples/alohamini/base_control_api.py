@@ -287,11 +287,12 @@ def _sender_loop(
                 }
             )
 
+        if lift_active:
+            action["lift_axis.vel"] = float(lift_vel)
+        elif do_lift_stop_once:
+            action["lift_axis.vel"] = 0.0
+
         if action:
-            if lift_active:
-                action["lift_axis.vel"] = float(lift_vel)
-            elif do_lift_stop_once:
-                action["lift_axis.vel"] = 0.0
             robot.send_action(action)
         dt = time.perf_counter() - t0
         time.sleep(max(period_s - dt, 0.0))
