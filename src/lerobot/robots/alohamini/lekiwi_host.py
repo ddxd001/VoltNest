@@ -394,9 +394,9 @@ class GestureController:
     def _build_raised_pose(self, base: dict[str, float]) -> dict[str, float]:
         pose = dict(base)
         # Conservative deltas to avoid aggressive motion.
-        pose["arm_right_shoulder_lift.pos"] = base["arm_right_shoulder_lift.pos"] + 90.0
-        pose["arm_right_elbow_flex.pos"] = base["arm_right_elbow_flex.pos"] - 0.0
-        pose["arm_right_wrist_flex.pos"] = base["arm_right_wrist_flex.pos"] + 0.0
+        pose["arm_right_shoulder_lift.pos"] = base["arm_right_shoulder_lift.pos"] + 7.0
+        pose["arm_right_elbow_flex.pos"] = base["arm_right_elbow_flex.pos"] - 8.0
+        pose["arm_right_wrist_flex.pos"] = base["arm_right_wrist_flex.pos"] + 5.0
         return pose
 
     def start_greet(self, observation: dict, waves: int = 2, speed_scale: float = 1.0) -> tuple[bool, str]:
