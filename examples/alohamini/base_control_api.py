@@ -242,10 +242,17 @@ def _sender_loop(
     while not stop_event.is_set():
         t0 = time.perf_counter()
         x, y, th, _ts, active, do_release, once_cmds = state.consume_sender_state()
+
+        # IMPORTANT:
+        # ZMQ sockets are configured with CONFLATE=1, so only the latest message survives.
+        # Merge all command intents into a single action per loop to avoid dropping one-shot
+        # commands (e.g. lift/audio) when base keepalive is enabled.
+        action: dict[str, Any] = {}
         for cmd in once_cmds:
-            robot.send_action(cmd)
+            action.update(cmd)
+
         if active:
-            robot.send_action(
+            action.update(
                 {
                     "x.vel": x,
                     "y.vel": y,
@@ -257,7 +264,7 @@ def _sender_loop(
                 }
             )
         elif do_release:
-            robot.send_action(
+            action.update(
                 {
                     "x.vel": 0.0,
                     "y.vel": 0.0,
@@ -267,6 +274,9 @@ def _sender_loop(
                     "__base_priority": int(priority),
                 }
             )
+
+        if action:
+            robot.send_action(action)
         dt = time.perf_counter() - t0
         time.sleep(max(period_s - dt, 0.0))
 
