@@ -38,6 +38,7 @@ class _SharedState:
         self.y_vel_mps: float = 0.0
         self.theta_vel_degps: float = 0.0
         self.lift_target_mm: float = 0.0
+        self.lift_observed_mm: float | None = None
         self.last_update_s: float = time.time()
         self.control_active: bool = False
         self.release_once: bool = False
@@ -82,9 +83,15 @@ class _SharedState:
 
     def step_lift_target_mm(self, delta_mm: float) -> float:
         with self._lock:
-            self.lift_target_mm = float(self.lift_target_mm + float(delta_mm))
+            # Use live observed height if available, which matches keyboard U/J behavior.
+            base_mm = self.lift_observed_mm if self.lift_observed_mm is not None else self.lift_target_mm
+            self.lift_target_mm = float(base_mm + float(delta_mm))
             self.pending_once_commands.append({"lift_axis.height_mm": self.lift_target_mm})
             return self.lift_target_mm
+
+    def update_lift_observed_mm(self, observed_mm: float) -> None:
+        with self._lock:
+            self.lift_observed_mm = float(observed_mm)
 
     def consume_sender_state(self) -> tuple[float, float, float, float, bool, bool, list[dict[str, Any]]]:
         with self._lock:
@@ -103,7 +110,7 @@ class _SharedState:
                 once_cmds,
             )
 
-    def snapshot(self) -> tuple[float, float, float, float, bool, float]:
+    def snapshot(self) -> tuple[float, float, float, float, bool, float, float | None]:
         with self._lock:
             return (
                 float(self.x_vel_mps),
@@ -112,6 +119,7 @@ class _SharedState:
                 float(self.last_update_s),
                 bool(self.control_active),
                 float(self.lift_target_mm),
+                None if self.lift_observed_mm is None else float(self.lift_observed_mm),
             )
 
 
@@ -142,7 +150,7 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             if self.path.rstrip("/") in ("", "/health", "/status"):
-                x, y, th, ts, active, lift_target = state.snapshot()
+                x, y, th, ts, active, lift_target, lift_observed = state.snapshot()
                 _write_json(
                     self,
                     200,
@@ -150,6 +158,7 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
                         "ok": True,
                         "cmd": {"x_vel": x, "y_vel": y, "theta_vel": th},
                         "lift_target_mm": lift_target,
+                        "lift_observed_mm": lift_observed,
                         "last_update_s": ts,
                         "control_active": active,
                     },
@@ -281,6 +290,18 @@ def _sender_loop(
         time.sleep(max(period_s - dt, 0.0))
 
 
+def _observation_loop(robot: "LeKiwiClient", state: _SharedState, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            obs = robot.get_observation()
+            if "lift_axis.height_mm" in obs:
+                state.update_lift_observed_mm(float(obs["lift_axis.height_mm"]))
+        except Exception:
+            # Keep API server resilient if observation stream is temporarily unavailable.
+            pass
+        time.sleep(0.02)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="AlohaMini base HTTP control API (Mac side).")
     ap.add_argument("--remote_ip", type=str, required=True, help="Pi host IP address")
@@ -314,6 +335,8 @@ def main() -> int:
         daemon=True,
     )
     sender.start()
+    observer = threading.Thread(target=_observation_loop, args=(robot, state, stop_event), daemon=True)
+    observer.start()
 
     server = ThreadingHTTPServer((args.http_host, int(args.http_port)), make_handler(state))
     try:
