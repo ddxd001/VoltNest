@@ -386,7 +386,8 @@ def main():
     video_thread = None
     audio_player = None
     arbitrator = BaseControlArbitrator(default_lease_ms=1200, default_priority=10)
-    audio_dir = "/home/ubuntu/lerobot_alohamini/audio"
+    # Use project-root-relative audio directory to avoid hardcoded project name.
+    audio_dir = os.path.join(os.getcwd(), "audio")
     
     if host_config.enable_video_playback and host_config.video_path:
         print(f"[MAIN] Starting video player thread...", flush=True)

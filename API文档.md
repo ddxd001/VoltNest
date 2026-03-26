@@ -1,6 +1,6 @@
-# AlohaMini 控制 API 文档
+# VoltNest 控制 API 文档
 
-本文档基于当前项目实现，说明如何通过 HTTP API 控制 AlohaMini 的底盘、升降轴以及音频播放。
+本文档基于 VoltNest 当前实现，说明如何通过 HTTP API 控制机器人底盘、升降轴以及音频播放。
 
 ## 服务概览
 
@@ -162,14 +162,14 @@ curl -X POST http://127.0.0.1:8000/audio/stop
 
 ## 音频文件路径规则
 
-Pi 端音频目录固定为：
+Pi 端音频目录默认位于项目根目录下：
 
-`/home/ubuntu/lerobot_alohamini/audio`
+`<项目根目录>/audio`
 
 `/audio/play` 的 `file` 建议使用相对路径（相对于上面的目录）：
 
 - 示例传参：`"welcome/a.mp3"`
-- 实际播放路径：`/home/ubuntu/lerobot_alohamini/audio/welcome/a.mp3`
+- 实际播放路径示例：`~/VoltNest/audio/welcome/a.mp3`
 
 ## 常见错误码
 

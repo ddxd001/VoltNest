@@ -1,5 +1,5 @@
 #!/bin/bash
-# LeRobot AlohaMini - Mac 端（遥控端）一键启动脚本
+# VoltNest - Mac 端（遥控端）一键启动脚本
 # 用于启动主臂遥操作程序
 
 set -e
@@ -19,7 +19,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 echo -e "${BLUE}================================================${NC}"
-echo -e "${BLUE}  LeRobot AlohaMini - Mac 端启动${NC}"
+echo -e "${BLUE}  VoltNest - Mac 端启动${NC}"
 echo -e "${BLUE}================================================${NC}"
 echo ""
 

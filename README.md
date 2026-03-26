@@ -1,4 +1,4 @@
-# LeRobot AlohaMini - 完整文档
+# VoltNest - 完整文档
 
 ## 📋 目录
 
@@ -26,7 +26,7 @@
 
 ## 简介
 
-Compared to the original lerobot, lerobot_alohamini significantly enhances debugging capabilities and is adapted for AlohaMini wheeled dual-arm robot hardware (based on Lekiwi extension).
+Compared to the original lerobot, VoltNest significantly enhances debugging capabilities and is adapted for AlohaMini wheeled dual-arm robot hardware (based on Lekiwi extension).
 
 For newly added debugging commands, please refer to:
 [Debug Command Summary](examples/debug/README.md)
@@ -43,14 +43,14 @@ AlohaMini Hardware
 #### Mac 端（遥控端）
 
 ```bash
-cd ~/Repository/lerobot_alohamini
+cd ~/Repository/VoltNest
 ./start_mac.sh
 ```
 
 #### 树莓派端（从臂端）
 
 ```bash
-cd ~/lerobot_alohamini
+cd ~/VoltNest
 ./start_pi.sh
 ```
 
@@ -78,7 +78,7 @@ cd ~/lerobot_alohamini
 ssh ubuntu@192.168.3.33
 
 # 运行一键启动脚本
-cd ~/lerobot_alohamini
+cd ~/VoltNest
 ./start_pi.sh
 ```
 
@@ -86,7 +86,7 @@ cd ~/lerobot_alohamini
 
 ```bash
 # 在 Mac 上运行
-cd ~/Repository/lerobot_alohamini
+cd ~/Repository/VoltNest
 ./start_mac.sh
 ```
 
@@ -120,7 +120,7 @@ After entering in terminal, you should be able to see the CUDA version number
 
 ```bash
 cd ~
-git clone https://github.com/ddxd001/lerobot_alohamini.git
+git clone https://github.com/ddxd001/VoltNest.git
 ```
 
 ### 3. 串口授权
@@ -151,7 +151,7 @@ conda activate lerobot_alohamini
 
 Install environment dependencies
 ```bash
-cd ~/lerobot_alohamini
+cd ~/VoltNest
 pip install -e .[all]
 conda install ffmpeg=7.1.1 -c conda-forge
 ```
@@ -164,7 +164,7 @@ Connect the robot arms to power and to the computer via USB, then find the robot
 
 Method 1: Find ports through script:
 ```bash
-cd ~/lerobot_alohamini
+cd ~/VoltNest
 lerobot-find-port
 ```
 
@@ -296,10 +296,10 @@ conda activate lerobot
 source /etc/network_turbo
 
 # Get lerobot
-git clone https://github.com/ddxd001/lerobot_alohamini.git
+git clone https://github.com/ddxd001/VoltNest.git
 
 # Install necessary files
-cd ~/lerobot_alohamini
+cd ~/VoltNest
 pip install -e ".[feetech,aloha,pusht]"
 ```
 
@@ -347,7 +347,7 @@ lerobot-calibrate \
 ```bash
 ssh ubuntu@192.168.3.33
 conda activate lerobot_alohamini
-cd ~/lerobot_alohamini
+cd ~/VoltNest
 lerobot-calibrate --robot.type=lekiwi
 ```
 
@@ -468,21 +468,21 @@ ENABLE_CAMERA_RECORDING=false   # 改为 false（默认）
 
 ```bash
 # 实时查看录制日志
-tail -f ~/lerobot_alohamini/camera_recorder/recorder.log
+tail -f ~/VoltNest/camera_recorder/recorder.log
 ```
 
 #### 查看录制文件
 
 ```bash
 # 列出所有录制文件
-ls -lh ~/lerobot_alohamini/camera_recorder/recordings/
+ls -lh ~/VoltNest/camera_recorder/recordings/
 ```
 
 #### 下载录制文件
 
 ```bash
 # 从树莓派下载到 Mac
-scp ubuntu@192.168.3.33:~/lerobot_alohamini/camera_recorder/recordings/*.mp4 ~/Downloads/
+scp ubuntu@192.168.3.33:~/VoltNest/camera_recorder/recordings/*.mp4 ~/Downloads/
 ```
 
 ### 🔧 高级配置
@@ -576,7 +576,7 @@ AUTO_UPDATE=false
 如果禁用了自动更新，可以手动更新代码：
 
 ```bash
-cd ~/lerobot_alohamini
+cd ~/VoltNest
 git pull origin main
 pip install -e ".[feetech]"  # 如有依赖变化
 ```
@@ -610,7 +610,7 @@ conda activate lerobot_alohamini
 ### 4. 摄像头录制失败
 
 - 检查摄像头设备：`ls -l /dev/video*`
-- 查看录制日志：`cat ~/lerobot_alohamini/camera_recorder/recorder.log`
+- 查看录制日志：`cat ~/VoltNest/camera_recorder/recorder.log`
 - 测试摄像头：`cd camera_recorder && python scripts/test_camera.py`
 
 ---
