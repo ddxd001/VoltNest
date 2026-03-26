@@ -44,6 +44,8 @@ class _SharedState:
         self.control_active: bool = False
         self.release_once: bool = False
         self.pending_once_commands: list[dict[str, Any]] = []
+        self.gesture_active: bool = False
+        self.gesture_last: str = "idle"
 
     def set_cmd(self, x: float, y: float, theta: float, active: bool = True) -> None:
         with self._lock:
@@ -75,6 +77,20 @@ class _SharedState:
     def queue_once_command(self, cmd: dict[str, Any]) -> None:
         with self._lock:
             self.pending_once_commands.append(dict(cmd))
+
+    def queue_gesture_greet(self, waves: int, speed_scale: float) -> None:
+        with self._lock:
+            self.pending_once_commands.append(
+                {"__gesture": "greet", "__gesture_waves": int(waves), "__gesture_speed_scale": float(speed_scale)}
+            )
+            self.gesture_active = True
+            self.gesture_last = "greet"
+
+    def queue_gesture_stop(self) -> None:
+        with self._lock:
+            self.pending_once_commands.append({"__gesture": "stop"})
+            self.gesture_active = False
+            self.gesture_last = "stop"
 
     def set_lift_velocity(self, velocity: float) -> float:
         with self._lock:
@@ -114,7 +130,7 @@ class _SharedState:
                 float(self.lift_vel_cmd),
             )
 
-    def snapshot(self) -> tuple[float, float, float, float, bool, bool, float]:
+    def snapshot(self) -> tuple[float, float, float, float, bool, bool, float, bool, str]:
         with self._lock:
             return (
                 float(self.x_vel_mps),
@@ -124,6 +140,8 @@ class _SharedState:
                 bool(self.control_active),
                 bool(self.lift_active),
                 float(self.lift_vel_cmd),
+                bool(self.gesture_active),
+                str(self.gesture_last),
             )
 
 
@@ -154,7 +172,7 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             if self.path.rstrip("/") in ("", "/health", "/status"):
-                x, y, th, ts, active, lift_active, lift_vel = state.snapshot()
+                x, y, th, ts, active, lift_active, lift_vel, gesture_active, gesture_last = state.snapshot()
                 _write_json(
                     self,
                     200,
@@ -163,6 +181,8 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
                         "cmd": {"x_vel": x, "y_vel": y, "theta_vel": th},
                         "lift_active": lift_active,
                         "lift_vel_cmd": lift_vel,
+                        "gesture_active": gesture_active,
+                        "gesture_last": gesture_last,
                         "last_update_s": ts,
                         "control_active": active,
                     },
@@ -230,6 +250,23 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
                 if self.path.rstrip("/") == "/audio/stop":
                     state.queue_once_command({"__audio_stop": True})
                     _write_json(self, 200, {"ok": True})
+                    return
+
+                if self.path.rstrip("/") == "/gesture/greet":
+                    data = _parse_json_body(self)
+                    waves = int(data.get("waves", 2))
+                    speed_scale = float(data.get("speed_scale", 1.0))
+                    state.queue_gesture_greet(waves=waves, speed_scale=speed_scale)
+                    _write_json(
+                        self,
+                        200,
+                        {"ok": True, "gesture": "greet", "waves": int(waves), "speed_scale": float(speed_scale)},
+                    )
+                    return
+
+                if self.path.rstrip("/") == "/gesture/stop":
+                    state.queue_gesture_stop()
+                    _write_json(self, 200, {"ok": True, "gesture": "stop"})
                     return
 
                 _write_json(self, 404, {"ok": False, "error": "not_found"})
@@ -336,7 +373,7 @@ def main() -> int:
     try:
         print(f"Base control API listening on http://{args.http_host}:{args.http_port}")
         print(
-            "Endpoints: GET /health, POST /move, POST /stop, POST /release, POST /lift, POST /audio/play, POST /audio/stop"
+            "Endpoints: GET /health, POST /move, POST /stop, POST /release, POST /lift, POST /audio/play, POST /audio/stop, POST /gesture/greet, POST /gesture/stop"
         )
         server.serve_forever()
     except KeyboardInterrupt:

@@ -160,6 +160,33 @@ curl -X POST http://127.0.0.1:8000/audio/play \
 curl -X POST http://127.0.0.1:8000/audio/stop
 ```
 
+---
+
+### 5) 手势控制（右臂打招呼）
+
+#### `POST /gesture/greet`
+
+触发机器人右臂挥手动作（无需遥操作主臂）。
+
+```bash
+curl -X POST http://127.0.0.1:8000/gesture/greet \
+  -H "Content-Type: application/json" \
+  -d '{"waves":2,"speed_scale":1.0}'
+```
+
+参数说明：
+
+- `waves`：挥手次数，默认 `2`
+- `speed_scale`：动作速度倍率，默认 `1.0`（越大越快）
+
+#### `POST /gesture/stop`
+
+中断当前手势动作。
+
+```bash
+curl -X POST http://127.0.0.1:8000/gesture/stop
+```
+
 ## 音频文件路径规则
 
 Pi 端音频目录默认位于项目根目录下：
@@ -185,6 +212,7 @@ Pi 端音频目录默认位于项目根目录下：
 
 - 底盘控制是持续发送机制，未调用 `/stop` 前会保持当前速度。
 - 升降也是持续速度控制，未发送 `{"stop":true}` 前会持续运动。
+- 手势控制在 Pi 端本地执行，不依赖遥操主臂持续输入。
 - 如需把底盘交回键盘控制，请调用 `/release`。
 - 音频播放依赖 `ffplay`（通常来自 `ffmpeg`）。若未安装，播放会失败。
 

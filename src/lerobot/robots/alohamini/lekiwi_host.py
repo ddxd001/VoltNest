@@ -17,6 +17,7 @@
 import base64
 import json
 import logging
+import math
 import time
 import sys
 import threading
@@ -32,6 +33,14 @@ from .lekiwi import LeKiwi
 
 _BASE_KEYS = ("x.vel", "y.vel", "theta.vel")
 _ARB_META_KEYS = ("__source", "__base_claim", "__base_release", "__base_lease_ms", "__base_priority")
+_RIGHT_ARM_KEYS = (
+    "arm_right_shoulder_pan.pos",
+    "arm_right_shoulder_lift.pos",
+    "arm_right_elbow_flex.pos",
+    "arm_right_wrist_flex.pos",
+    "arm_right_wrist_roll.pos",
+    "arm_right_gripper.pos",
+)
 
 
 class BaseControlArbitrator:
@@ -363,6 +372,80 @@ class AudioPlayer:
             return False, f"Failed to play audio: {e}"
 
 
+class GestureController:
+    """Generate predefined right-arm gestures locally on Pi side."""
+
+    def __init__(self) -> None:
+        self.active = False
+        self.start_time = 0.0
+        self.waves = 2
+        self.speed_scale = 1.0
+        self.base_pose: dict[str, float] = {}
+        self.raised_pose: dict[str, float] = {}
+        self.wave_amplitude_deg = 14.0
+
+    def _lerp_pose(self, a: dict[str, float], b: dict[str, float], alpha: float) -> dict[str, float]:
+        alpha = max(0.0, min(1.0, alpha))
+        out: dict[str, float] = {}
+        for k in _RIGHT_ARM_KEYS:
+            out[k] = float(a.get(k, 0.0) + (b.get(k, 0.0) - a.get(k, 0.0)) * alpha)
+        return out
+
+    def _build_raised_pose(self, base: dict[str, float]) -> dict[str, float]:
+        pose = dict(base)
+        # Conservative deltas to avoid aggressive motion.
+        pose["arm_right_shoulder_lift.pos"] = base["arm_right_shoulder_lift.pos"] + 7.0
+        pose["arm_right_elbow_flex.pos"] = base["arm_right_elbow_flex.pos"] - 8.0
+        pose["arm_right_wrist_flex.pos"] = base["arm_right_wrist_flex.pos"] + 5.0
+        return pose
+
+    def start_greet(self, observation: dict, waves: int = 2, speed_scale: float = 1.0) -> tuple[bool, str]:
+        missing = [k for k in _RIGHT_ARM_KEYS if k not in observation]
+        if missing:
+            return False, f"Missing right-arm observation keys: {missing[:2]}"
+
+        self.base_pose = {k: float(observation[k]) for k in _RIGHT_ARM_KEYS}
+        self.raised_pose = self._build_raised_pose(self.base_pose)
+        self.waves = max(1, min(int(waves), 6))
+        self.speed_scale = max(0.3, min(float(speed_scale), 3.0))
+        self.start_time = time.time()
+        self.active = True
+        return True, f"Greet started (waves={self.waves}, speed_scale={self.speed_scale:.2f})"
+
+    def stop(self) -> None:
+        self.active = False
+
+    def update(self, now_s: float) -> dict[str, float]:
+        if not self.active:
+            return {}
+
+        t = (now_s - self.start_time) * self.speed_scale
+        raise_dur = 0.45
+        wave_period = 0.45
+        wave_dur = wave_period * self.waves
+        return_dur = 0.45
+        total = raise_dur + wave_dur + return_dur
+
+        if t >= total:
+            self.active = False
+            return {}
+
+        if t < raise_dur:
+            return self._lerp_pose(self.base_pose, self.raised_pose, t / raise_dur)
+
+        if t < raise_dur + wave_dur:
+            tau = t - raise_dur
+            # Oscillate shoulder pan around raised pose.
+            phase = 2.0 * 3.1415926 * (tau / wave_period)
+            pose = dict(self.raised_pose)
+            pose["arm_right_shoulder_pan.pos"] = self.raised_pose["arm_right_shoulder_pan.pos"] + self.wave_amplitude_deg * math.sin(
+                phase
+            )
+            return pose
+
+        return self._lerp_pose(self.raised_pose, self.base_pose, (t - raise_dur - wave_dur) / return_dur)
+
+
 def main():
     logging.info("Configuring LeKiwi")
     robot_config = LeKiwiConfig()
@@ -385,6 +468,7 @@ def main():
     video_player = None
     video_thread = None
     audio_player = None
+    gesture_controller = GestureController()
     arbitrator = BaseControlArbitrator(default_lease_ms=1200, default_priority=10)
     # Use project-root-relative audio directory to avoid hardcoded project name.
     audio_dir = os.path.join(os.getcwd(), "audio")
@@ -421,13 +505,28 @@ def main():
         # Business logic
         start = time.perf_counter()
         duration = 0
+        last_observation: dict = {}
 
         while duration < host.connection_time_s:
             loop_start_time = time.time()
+            data: dict = {}
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
                 data = arbitrator.filter_action(data)
+
+                gesture_cmd = str(data.pop("__gesture", "")).strip().lower()
+                if gesture_cmd:
+                    if gesture_cmd == "greet":
+                        waves = int(data.pop("__gesture_waves", 2))
+                        speed_scale = float(data.pop("__gesture_speed_scale", 1.0))
+                        ok, message = gesture_controller.start_greet(last_observation, waves=waves, speed_scale=speed_scale)
+                        print(f"[GESTURE] {message}", flush=True)
+                        if not ok:
+                            logging.warning(message)
+                    elif gesture_cmd == "stop":
+                        gesture_controller.stop()
+                        print("[GESTURE] Stopped", flush=True)
 
                 audio_play_file = data.pop("__audio_play", None)
                 audio_stop = bool(data.pop("__audio_stop", False))
@@ -447,14 +546,7 @@ def main():
                         video_player.switch_to_next()
                     elif "video_prev" in data and data["video_prev"]:
                         video_player.switch_to_previous()
-                
-                # Ensure base keys exist to satisfy robot.send_action() assumptions.
-                for k in _BASE_KEYS:
-                    data.setdefault(k, 0.0)
 
-                # 发送动作到机器人
-                _action_sent = robot.send_action(data)
-                
                 last_cmd_time = time.time()
                 watchdog_active = False
             except zmq.Again:
@@ -462,6 +554,16 @@ def main():
                     logging.warning("No command available")
             except Exception as e:
                 logging.exception("Message fetching failed: %s", e)
+
+            gesture_action = gesture_controller.update(time.time())
+            if gesture_action:
+                data.update(gesture_action)
+
+            if data:
+                # Ensure base keys exist to satisfy robot.send_action() assumptions.
+                for k in _BASE_KEYS:
+                    data.setdefault(k, 0.0)
+                _action_sent = robot.send_action(data)
 
             now = time.time()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
