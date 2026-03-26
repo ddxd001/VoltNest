@@ -25,6 +25,7 @@ import subprocess
 
 import cv2
 import zmq
+from pathlib import Path
 
 from .config_lekiwi import LeKiwiConfig, LeKiwiHostConfig
 from .lekiwi import LeKiwi
@@ -283,6 +284,62 @@ class VideoPlayer:
                 print(f"[VIDEO] Failed to clean up playlist: {e}", flush=True)
  
 
+class AudioPlayer:
+    """Simple audio player wrapper using ffplay."""
+
+    def __init__(self, audio_dir: str):
+        self.audio_dir = Path(audio_dir).expanduser().resolve()
+        self.process: subprocess.Popen | None = None
+
+    def _resolve_audio_file(self, file_name: str) -> Path | None:
+        p = Path(file_name)
+        if not p.is_absolute():
+            p = (self.audio_dir / p).resolve()
+        else:
+            p = p.resolve()
+
+        # Keep playback constrained under configured audio directory when using relative file names.
+        if not str(p).startswith(str(self.audio_dir)):
+            return None
+        if not p.exists() or not p.is_file():
+            return None
+        return p
+
+    def stop(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+        self.process = None
+
+    def play(self, file_name: str) -> tuple[bool, str]:
+        target = self._resolve_audio_file(file_name)
+        if target is None:
+            return False, f"Audio file not found or not allowed: {file_name}"
+
+        self.stop()
+        try:
+            self.process = subprocess.Popen(
+                [
+                    "ffplay",
+                    "-nodisp",
+                    "-autoexit",
+                    "-loglevel",
+                    "error",
+                    str(target),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True, f"Playing audio: {target.name}"
+        except FileNotFoundError:
+            return False, "ffplay not found; please install ffmpeg"
+        except Exception as e:
+            return False, f"Failed to play audio: {e}"
+
+
 def main():
     logging.info("Configuring LeKiwi")
     robot_config = LeKiwiConfig()
@@ -304,7 +361,9 @@ def main():
 
     video_player = None
     video_thread = None
+    audio_player = None
     arbitrator = BaseControlArbitrator(default_lease_ms=1200, default_priority=10)
+    audio_dir = "/home/ubuntu/lerobot_alohamini/audio"
     
     if host_config.enable_video_playback and host_config.video_path:
         print(f"[MAIN] Starting video player thread...", flush=True)
@@ -323,6 +382,13 @@ def main():
     else:
         print(f"[MAIN] Video playback NOT enabled or path not set", flush=True)
 
+    try:
+        audio_player = AudioPlayer(audio_dir)
+        print(f"[AUDIO] Audio control enabled, directory: {audio_dir}", flush=True)
+    except Exception as e:
+        logging.warning(f"Failed to initialize audio player: {e}")
+        audio_player = None
+
     last_cmd_time = time.time()
     watchdog_active = False
     logging.info("Waiting for commands...")
@@ -338,6 +404,18 @@ def main():
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
                 data = arbitrator.filter_action(data)
+
+                audio_play_file = data.pop("__audio_play", None)
+                audio_stop = bool(data.pop("__audio_stop", False))
+                if audio_player is not None:
+                    if audio_stop:
+                        audio_player.stop()
+                        print("[AUDIO] Stopped", flush=True)
+                    if audio_play_file:
+                        ok, message = audio_player.play(str(audio_play_file))
+                        print(f"[AUDIO] {message}", flush=True)
+                        if not ok:
+                            logging.warning(message)
                 
                 # 检查是否有视频切换命令
                 if video_player:
@@ -408,6 +486,12 @@ def main():
             video_player.stop()
             if video_thread and video_thread.is_alive():
                 video_thread.join(timeout=2)
+
+        if audio_player:
+            try:
+                audio_player.stop()
+            except Exception as e:
+                logging.warning(f"Error during audio stop: {e}")
         
         try:
             robot.disconnect()

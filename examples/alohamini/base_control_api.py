@@ -37,9 +37,11 @@ class _SharedState:
         self.x_vel_mps: float = 0.0
         self.y_vel_mps: float = 0.0
         self.theta_vel_degps: float = 0.0
+        self.lift_target_mm: float = 0.0
         self.last_update_s: float = time.time()
         self.control_active: bool = False
         self.release_once: bool = False
+        self.pending_once_commands: list[dict[str, Any]] = []
 
     def set_cmd(self, x: float, y: float, theta: float, active: bool = True) -> None:
         with self._lock:
@@ -68,8 +70,26 @@ class _SharedState:
             self.control_active = False
             self.release_once = True
 
-    def consume_sender_state(self) -> tuple[float, float, float, float, bool, bool]:
+    def queue_once_command(self, cmd: dict[str, Any]) -> None:
         with self._lock:
+            self.pending_once_commands.append(dict(cmd))
+
+    def set_lift_target_mm(self, target_mm: float) -> float:
+        with self._lock:
+            self.lift_target_mm = float(target_mm)
+            self.pending_once_commands.append({"lift_axis.height_mm": self.lift_target_mm})
+            return self.lift_target_mm
+
+    def step_lift_target_mm(self, delta_mm: float) -> float:
+        with self._lock:
+            self.lift_target_mm = float(self.lift_target_mm + float(delta_mm))
+            self.pending_once_commands.append({"lift_axis.height_mm": self.lift_target_mm})
+            return self.lift_target_mm
+
+    def consume_sender_state(self) -> tuple[float, float, float, float, bool, bool, list[dict[str, Any]]]:
+        with self._lock:
+            once_cmds = list(self.pending_once_commands)
+            self.pending_once_commands.clear()
             do_release = self.release_once
             if self.release_once:
                 self.release_once = False
@@ -80,9 +100,10 @@ class _SharedState:
                 float(self.last_update_s),
                 bool(self.control_active),
                 bool(do_release),
+                once_cmds,
             )
 
-    def snapshot(self) -> tuple[float, float, float, float, bool]:
+    def snapshot(self) -> tuple[float, float, float, float, bool, float]:
         with self._lock:
             return (
                 float(self.x_vel_mps),
@@ -90,6 +111,7 @@ class _SharedState:
                 float(self.theta_vel_degps),
                 float(self.last_update_s),
                 bool(self.control_active),
+                float(self.lift_target_mm),
             )
 
 
@@ -120,13 +142,14 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             if self.path.rstrip("/") in ("", "/health", "/status"):
-                x, y, th, ts, active = state.snapshot()
+                x, y, th, ts, active, lift_target = state.snapshot()
                 _write_json(
                     self,
                     200,
                     {
                         "ok": True,
                         "cmd": {"x_vel": x, "y_vel": y, "theta_vel": th},
+                        "lift_target_mm": lift_target,
                         "last_update_s": ts,
                         "control_active": active,
                     },
@@ -157,6 +180,46 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
                     _write_json(self, 200, {"ok": True})
                     return
 
+                if self.path.rstrip("/") == "/lift":
+                    data = _parse_json_body(self)
+                    if "height_mm" in data:
+                        target = state.set_lift_target_mm(float(data["height_mm"]))
+                        _write_json(self, 200, {"ok": True, "lift_target_mm": target})
+                        return
+
+                    direction = str(data.get("direction", "")).strip().lower()
+                    step_mm = float(data.get("step_mm", 10.0))
+                    if direction == "up":
+                        target = state.step_lift_target_mm(abs(step_mm))
+                        _write_json(self, 200, {"ok": True, "lift_target_mm": target})
+                        return
+                    if direction == "down":
+                        target = state.step_lift_target_mm(-abs(step_mm))
+                        _write_json(self, 200, {"ok": True, "lift_target_mm": target})
+                        return
+
+                    _write_json(
+                        self,
+                        400,
+                        {"ok": False, "error": "invalid_lift_payload", "hint": "use height_mm or direction=up/down"},
+                    )
+                    return
+
+                if self.path.rstrip("/") == "/audio/play":
+                    data = _parse_json_body(self)
+                    file_name = str(data.get("file", "")).strip()
+                    if not file_name:
+                        _write_json(self, 400, {"ok": False, "error": "missing_file"})
+                        return
+                    state.queue_once_command({"__audio_play": file_name})
+                    _write_json(self, 200, {"ok": True, "file": file_name})
+                    return
+
+                if self.path.rstrip("/") == "/audio/stop":
+                    state.queue_once_command({"__audio_stop": True})
+                    _write_json(self, 200, {"ok": True})
+                    return
+
                 _write_json(self, 404, {"ok": False, "error": "not_found"})
             except json.JSONDecodeError:
                 _write_json(self, 400, {"ok": False, "error": "invalid_json"})
@@ -178,7 +241,9 @@ def _sender_loop(
     period_s = 1.0 / max(send_hz, 1e-6)
     while not stop_event.is_set():
         t0 = time.perf_counter()
-        x, y, th, _ts, active, do_release = state.consume_sender_state()
+        x, y, th, _ts, active, do_release, once_cmds = state.consume_sender_state()
+        for cmd in once_cmds:
+            robot.send_action(cmd)
         if active:
             robot.send_action(
                 {
@@ -243,7 +308,9 @@ def main() -> int:
     server = ThreadingHTTPServer((args.http_host, int(args.http_port)), make_handler(state))
     try:
         print(f"Base control API listening on http://{args.http_host}:{args.http_port}")
-        print("Endpoints: GET /health, POST /move, POST /stop, POST /release")
+        print(
+            "Endpoints: GET /health, POST /move, POST /stop, POST /release, POST /lift, POST /audio/play, POST /audio/stop"
+        )
         server.serve_forever()
     except KeyboardInterrupt:
         pass
