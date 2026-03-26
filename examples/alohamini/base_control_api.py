@@ -37,8 +37,9 @@ class _SharedState:
         self.x_vel_mps: float = 0.0
         self.y_vel_mps: float = 0.0
         self.theta_vel_degps: float = 0.0
-        self.lift_target_mm: float = 0.0
-        self.lift_observed_mm: float | None = None
+        self.lift_vel_cmd: float = 0.0
+        self.lift_active: bool = False
+        self.lift_stop_once: bool = False
         self.last_update_s: float = time.time()
         self.control_active: bool = False
         self.release_once: bool = False
@@ -75,31 +76,31 @@ class _SharedState:
         with self._lock:
             self.pending_once_commands.append(dict(cmd))
 
-    def set_lift_target_mm(self, target_mm: float) -> float:
+    def set_lift_velocity(self, velocity: float) -> float:
         with self._lock:
-            self.lift_target_mm = float(target_mm)
-            self.pending_once_commands.append({"lift_axis.height_mm": self.lift_target_mm})
-            return self.lift_target_mm
+            self.lift_vel_cmd = float(velocity)
+            self.lift_active = True
+            self.lift_stop_once = False
+            return self.lift_vel_cmd
 
-    def step_lift_target_mm(self, delta_mm: float) -> float:
+    def stop_lift(self) -> None:
         with self._lock:
-            # Use live observed height if available, which matches keyboard U/J behavior.
-            base_mm = self.lift_observed_mm if self.lift_observed_mm is not None else self.lift_target_mm
-            self.lift_target_mm = float(base_mm + float(delta_mm))
-            self.pending_once_commands.append({"lift_axis.height_mm": self.lift_target_mm})
-            return self.lift_target_mm
+            self.lift_vel_cmd = 0.0
+            self.lift_active = False
+            self.lift_stop_once = True
 
-    def update_lift_observed_mm(self, observed_mm: float) -> None:
-        with self._lock:
-            self.lift_observed_mm = float(observed_mm)
-
-    def consume_sender_state(self) -> tuple[float, float, float, float, bool, bool, list[dict[str, Any]]]:
+    def consume_sender_state(
+        self,
+    ) -> tuple[float, float, float, float, bool, bool, list[dict[str, Any]], bool, bool, float]:
         with self._lock:
             once_cmds = list(self.pending_once_commands)
             self.pending_once_commands.clear()
             do_release = self.release_once
             if self.release_once:
                 self.release_once = False
+            do_lift_stop_once = self.lift_stop_once
+            if self.lift_stop_once:
+                self.lift_stop_once = False
             return (
                 float(self.x_vel_mps),
                 float(self.y_vel_mps),
@@ -108,9 +109,12 @@ class _SharedState:
                 bool(self.control_active),
                 bool(do_release),
                 once_cmds,
+                bool(self.lift_active),
+                bool(do_lift_stop_once),
+                float(self.lift_vel_cmd),
             )
 
-    def snapshot(self) -> tuple[float, float, float, float, bool, float, float | None]:
+    def snapshot(self) -> tuple[float, float, float, float, bool, bool, float]:
         with self._lock:
             return (
                 float(self.x_vel_mps),
@@ -118,8 +122,8 @@ class _SharedState:
                 float(self.theta_vel_degps),
                 float(self.last_update_s),
                 bool(self.control_active),
-                float(self.lift_target_mm),
-                None if self.lift_observed_mm is None else float(self.lift_observed_mm),
+                bool(self.lift_active),
+                float(self.lift_vel_cmd),
             )
 
 
@@ -150,15 +154,15 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             if self.path.rstrip("/") in ("", "/health", "/status"):
-                x, y, th, ts, active, lift_target, lift_observed = state.snapshot()
+                x, y, th, ts, active, lift_active, lift_vel = state.snapshot()
                 _write_json(
                     self,
                     200,
                     {
                         "ok": True,
                         "cmd": {"x_vel": x, "y_vel": y, "theta_vel": th},
-                        "lift_target_mm": lift_target,
-                        "lift_observed_mm": lift_observed,
+                        "lift_active": lift_active,
+                        "lift_vel_cmd": lift_vel,
                         "last_update_s": ts,
                         "control_active": active,
                     },
@@ -191,27 +195,26 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
 
                 if self.path.rstrip("/") == "/lift":
                     data = _parse_json_body(self)
-                    if "height_mm" in data:
-                        target = state.set_lift_target_mm(float(data["height_mm"]))
-                        _write_json(self, 200, {"ok": True, "lift_target_mm": target})
+                    if bool(data.get("stop", False)):
+                        state.stop_lift()
+                        _write_json(self, 200, {"ok": True, "lift_active": False, "lift_vel_cmd": 0.0})
                         return
 
                     direction = str(data.get("direction", "")).strip().lower()
-                    step_mm = float(data.get("step_mm", 10.0))
-                    if direction == "up":
-                        target = state.step_lift_target_mm(abs(step_mm))
-                        _write_json(self, 200, {"ok": True, "lift_target_mm": target})
-                        return
-                    if direction == "down":
-                        target = state.step_lift_target_mm(-abs(step_mm))
-                        _write_json(self, 200, {"ok": True, "lift_target_mm": target})
+                    speed = float(data.get("speed", data.get("velocity", 500.0)))
+
+                    if direction in ("up", "down"):
+                        vel = abs(speed) if direction == "up" else -abs(speed)
+                        vel = state.set_lift_velocity(vel)
+                        _write_json(self, 200, {"ok": True, "lift_active": True, "lift_vel_cmd": vel})
                         return
 
-                    _write_json(
-                        self,
-                        400,
-                        {"ok": False, "error": "invalid_lift_payload", "hint": "use height_mm or direction=up/down"},
-                    )
+                    if "velocity" in data or "speed" in data:
+                        vel = state.set_lift_velocity(speed)
+                        _write_json(self, 200, {"ok": True, "lift_active": True, "lift_vel_cmd": vel})
+                        return
+
+                    _write_json(self, 400, {"ok": False, "error": "invalid_lift_payload", "hint": "use direction/speed or stop"})
                     return
 
                 if self.path.rstrip("/") == "/audio/play":
@@ -250,7 +253,7 @@ def _sender_loop(
     period_s = 1.0 / max(send_hz, 1e-6)
     while not stop_event.is_set():
         t0 = time.perf_counter()
-        x, y, th, _ts, active, do_release, once_cmds = state.consume_sender_state()
+        x, y, th, _ts, active, do_release, once_cmds, lift_active, do_lift_stop_once, lift_vel = state.consume_sender_state()
 
         # IMPORTANT:
         # ZMQ sockets are configured with CONFLATE=1, so only the latest message survives.
@@ -285,21 +288,13 @@ def _sender_loop(
             )
 
         if action:
+            if lift_active:
+                action["lift_axis.vel"] = float(lift_vel)
+            elif do_lift_stop_once:
+                action["lift_axis.vel"] = 0.0
             robot.send_action(action)
         dt = time.perf_counter() - t0
         time.sleep(max(period_s - dt, 0.0))
-
-
-def _observation_loop(robot: "LeKiwiClient", state: _SharedState, stop_event: threading.Event) -> None:
-    while not stop_event.is_set():
-        try:
-            obs = robot.get_observation()
-            if "lift_axis.height_mm" in obs:
-                state.update_lift_observed_mm(float(obs["lift_axis.height_mm"]))
-        except Exception:
-            # Keep API server resilient if observation stream is temporarily unavailable.
-            pass
-        time.sleep(0.02)
 
 
 def main() -> int:
@@ -335,8 +330,6 @@ def main() -> int:
         daemon=True,
     )
     sender.start()
-    observer = threading.Thread(target=_observation_loop, args=(robot, state, stop_event), daemon=True)
-    observer.start()
 
     server = ThreadingHTTPServer((args.http_host, int(args.http_port)), make_handler(state))
     try:

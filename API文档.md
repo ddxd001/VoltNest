@@ -49,7 +49,8 @@ curl http://127.0.0.1:8000/health
     "y_vel": 0.0,
     "theta_vel": 0.0
   },
-  "lift_target_mm": 120.0,
+  "lift_active": true,
+  "lift_vel_cmd": 500.0,
   "last_update_s": 1711111111.11,
   "control_active": true
 }
@@ -101,40 +102,49 @@ curl -X POST http://127.0.0.1:8000/release
 
 控制升降轴（对应原键盘 `U/J` 行为）。
 
-支持两种模式：
+当前使用**速度控制模式**，支持两种写法：
 
-1. 绝对高度（推荐）
-2. 相对步进（up/down）
+1. `direction + speed`
+2. 直接给 `velocity`（可正可负）
 
-绝对高度示例：
+上升（等价按住 U）：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/lift \
   -H "Content-Type: application/json" \
-  -d '{"height_mm":120}'
+  -d '{"direction":"up","speed":600}'
 ```
 
-步进上升（等价按 U）：
+下降（等价按住 J）：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/lift \
   -H "Content-Type: application/json" \
-  -d '{"direction":"up","step_mm":10}'
+  -d '{"direction":"down","speed":600}'
 ```
 
-步进下降（等价按 J）：
+直接指定速度（正值上升，负值下降）：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/lift \
   -H "Content-Type: application/json" \
-  -d '{"direction":"down","step_mm":10}'
+  -d '{"velocity":-450}'
+```
+
+停止升降（速度置 0）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/lift \
+  -H "Content-Type: application/json" \
+  -d '{"stop":true}'
 ```
 
 参数说明：
 
-- `height_mm`：目标高度（毫米）
 - `direction`：`up` 或 `down`
-- `step_mm`：步进值（毫米），默认 `10`
+- `speed`：速度大小（默认 `500`）
+- `velocity`：直接速度值（正上升，负下降）
+- `stop`：`true` 表示停止升降
 
 ---
 
@@ -182,6 +192,7 @@ Pi 端音频目录固定为：
 ## 注意事项
 
 - 底盘控制是持续发送机制，未调用 `/stop` 前会保持当前速度。
+- 升降也是持续速度控制，未发送 `{"stop":true}` 前会持续运动。
 - 如需把底盘交回键盘控制，请调用 `/release`。
 - 音频播放依赖 `ffplay`（通常来自 `ffmpeg`）。若未安装，播放会失败。
 
