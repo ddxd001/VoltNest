@@ -514,6 +514,7 @@ def main():
         audio_player = None
 
     last_cmd_time = time.time()
+    last_no_cmd_log_time = 0.0
     watchdog_active = False
     logging.info("Waiting for commands...")
 
@@ -567,7 +568,10 @@ def main():
                 watchdog_active = False
             except zmq.Again:
                 if not watchdog_active:
-                    logging.warning("No command available")
+                    now = time.time()
+                    if now - last_no_cmd_log_time >= 1.0:
+                        logging.warning("No command available")
+                        last_no_cmd_log_time = now
             except Exception as e:
                 logging.exception("Message fetching failed: %s", e)
 
@@ -607,7 +611,7 @@ def main():
             try:
                 host.zmq_observation_socket.send_string(json.dumps(last_observation), flags=zmq.NOBLOCK)
             except zmq.Again:
-                logging.info("Dropping observation, no client connected")
+                logging.debug("Dropping observation, no client connected")
 
             # Ensure a short sleep to avoid overloading the CPU.
             elapsed = time.time() - loop_start_time

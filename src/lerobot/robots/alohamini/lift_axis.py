@@ -123,12 +123,8 @@ class LiftAxis:
                 try: 
                     raw_cur_ma = int(self._bus.read("Present_Current", name, normalize=False))
                     cur_ma = raw_cur_ma * 6.5
-                    print(f"[lift_axis.home] Present_Current={cur_ma} mA")  # debug
-                    print(f"[lift_axis.home] Present_Position={now_tick} ticks")  # debug
-
                 except Exception: cur_ma = 0
             if (use_current and cur_ma >= self.cfg.home_stall_current_ma) or (not moved):
-                print(f"[lift_axis.home] Stalled at current={cur_ma} mA, moved={moved}")  # debug
                 stuck += 1
             else:
                 stuck = 0
@@ -171,9 +167,7 @@ class LiftAxis:
         self._bus.write("Goal_Velocity", self.cfg.name, int(self.cfg.dir_sign * v))
 
         # Read current for debug only
-        raw_cur_ma = int(self._bus.read("Present_Current", self.cfg.name, normalize=False))
-        cur_ma = raw_cur_ma * 6.5
-        print(f"[lift_axis.update] target={self._target_mm:.2f} mm, cur={cur_mm:.2f} mm, err={err:.2f} mm, v={v:.1f}| current={cur_ma} mA")
+        # Keep update loop quiet by default to reduce terminal I/O overhead.
 
     # Lightweight coupling with action/obs
     def contribute_observation(self, obs: Dict[str, float]) -> None:

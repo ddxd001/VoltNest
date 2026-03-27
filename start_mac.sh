@@ -155,6 +155,7 @@ if [ "$ENABLE_BASE_API" = true ]; then
           --remote_ip "$REMOTE_IP" \
           --http_host "$API_HTTP_HOST" \
           --http_port "$API_HTTP_PORT" \
+          --send_hz 12 \
           > base_control_api.log 2>&1 &
         API_PID=$!
         sleep 1
@@ -180,7 +181,7 @@ echo -e "${BLUE}================================================${NC}"
 echo ""
 echo -e "${GREEN}配置信息：${NC}"
 echo "  - 远程 IP: $REMOTE_IP"
-echo "  - 控制频率: 30 FPS"
+echo "  - 控制频率: 12 FPS"
 echo "  - 左主臂: $LEFT_PORT"
 echo "  - 右主臂: $RIGHT_PORT"
 if [ "$ENABLE_BASE_API" = true ] && [ -n "$API_PID" ]; then
@@ -223,7 +224,7 @@ trap cleanup EXIT INT TERM
 # 运行遥操作程序
 python examples/alohamini/teleoperate_bi.py \
   --remote_ip $REMOTE_IP \
-  --fps 30
+  --fps 12
 
 # 程序结束
 echo ""

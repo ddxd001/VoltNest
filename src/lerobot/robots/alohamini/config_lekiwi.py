@@ -73,7 +73,7 @@ class LeKiwiHostConfig:
     watchdog_timeout_ms: int = 1500
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
-    max_loop_freq_hz: int = 30
+    max_loop_freq_hz: int = 12
     
     # Video playback configuration
     video_path: str | None = None

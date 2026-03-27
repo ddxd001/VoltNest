@@ -424,7 +424,7 @@ def main() -> int:
     ap.add_argument("--remote_ip", type=str, required=True, help="Pi host IP address")
     ap.add_argument("--http_host", type=str, default="127.0.0.1", help="HTTP bind host")
     ap.add_argument("--http_port", type=int, default=8000, help="HTTP bind port")
-    ap.add_argument("--send_hz", type=float, default=20.0, help="ZMQ command publish rate (Hz)")
+    ap.add_argument("--send_hz", type=float, default=12.0, help="ZMQ command publish rate (Hz)")
     ap.add_argument("--source", type=str, default="api_http", help="Arbitration source id")
     ap.add_argument("--lease_ms", type=int, default=1200, help="Arbitration lease timeout in ms")
     ap.add_argument("--priority", type=int, default=100, help="Arbitration priority (higher wins)")

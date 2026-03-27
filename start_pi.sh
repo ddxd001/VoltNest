@@ -154,7 +154,7 @@ echo ""
 echo -e "${GREEN}配置信息：${NC}"
 echo "  - 机械臂类型: so-arm-5dof"
 echo "  - 监听端口: 5555 (命令), 5556 (观测)"
-echo "  - 控制频率: 30 Hz"
+echo "  - 控制频率: 12 Hz"
 echo "  - 看门狗超时: 1500 ms"
 if [ "$ENABLE_CAMERA_RECORDING" = true ] && [ -n "$RECORDER_PID" ]; then
     echo "  - 摄像头录制: 已启用 (PID: $RECORDER_PID)"
