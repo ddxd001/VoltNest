@@ -475,7 +475,7 @@ def main():
     logging.info("Starting HostAgent")
     host_config = LeKiwiHostConfig()
     host_config.video_path = "/home/ubuntu/lerobot_alohamini/face_video"
-    host_config.enable_video_playback = True
+    host_config.enable_video_playback = False
     host = LeKiwiHost(host_config)
 
     print(f"[CONFIG] Video playback enabled: {host_config.enable_video_playback}", flush=True)
