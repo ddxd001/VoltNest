@@ -37,6 +37,10 @@ class _SharedState:
         self.x_vel_mps: float = 0.0
         self.y_vel_mps: float = 0.0
         self.theta_vel_degps: float = 0.0
+        self.timed_move_queue: list[dict[str, float]] = []
+        self.active_timed_move: dict[str, float] | None = None
+        self.active_timed_move_end_s: float = 0.0
+        self.active_timed_move_started_s: float = 0.0
         self.lift_vel_cmd: float = 0.0
         self.lift_active: bool = False
         self.lift_stop_once: bool = False
@@ -49,6 +53,11 @@ class _SharedState:
 
     def set_cmd(self, x: float, y: float, theta: float, active: bool = True) -> None:
         with self._lock:
+            # Manual velocity command interrupts timed queue execution.
+            self.timed_move_queue.clear()
+            self.active_timed_move = None
+            self.active_timed_move_end_s = 0.0
+            self.active_timed_move_started_s = 0.0
             self.x_vel_mps = float(x)
             self.y_vel_mps = float(y)
             self.theta_vel_degps = float(theta)
@@ -58,6 +67,10 @@ class _SharedState:
 
     def stop_cmd(self) -> None:
         with self._lock:
+            self.timed_move_queue.clear()
+            self.active_timed_move = None
+            self.active_timed_move_end_s = 0.0
+            self.active_timed_move_started_s = 0.0
             self.x_vel_mps = 0.0
             self.y_vel_mps = 0.0
             self.theta_vel_degps = 0.0
@@ -67,12 +80,50 @@ class _SharedState:
 
     def release_control(self) -> None:
         with self._lock:
+            self.timed_move_queue.clear()
+            self.active_timed_move = None
+            self.active_timed_move_end_s = 0.0
+            self.active_timed_move_started_s = 0.0
             self.x_vel_mps = 0.0
             self.y_vel_mps = 0.0
             self.theta_vel_degps = 0.0
             self.last_update_s = time.time()
             self.control_active = False
             self.release_once = True
+
+    def enqueue_timed_move(self, x: float, y: float, theta: float, duration_s: float) -> int:
+        with self._lock:
+            self.timed_move_queue.append(
+                {
+                    "x": float(x),
+                    "y": float(y),
+                    "theta": float(theta),
+                    "duration_s": float(duration_s),
+                }
+            )
+            return len(self.timed_move_queue) + (1 if self.active_timed_move is not None else 0)
+
+    def _advance_timed_move_locked(self, now_s: float) -> None:
+        # End current segment if finished.
+        if self.active_timed_move is not None and now_s >= self.active_timed_move_end_s:
+            self.active_timed_move = None
+            self.active_timed_move_end_s = 0.0
+            self.active_timed_move_started_s = 0.0
+            self.x_vel_mps = 0.0
+            self.y_vel_mps = 0.0
+            self.theta_vel_degps = 0.0
+            self.control_active = True
+
+        # Start next queued segment if idle.
+        if self.active_timed_move is None and self.timed_move_queue:
+            seg = self.timed_move_queue.pop(0)
+            self.active_timed_move = seg
+            self.active_timed_move_started_s = now_s
+            self.active_timed_move_end_s = now_s + float(seg["duration_s"])
+            self.x_vel_mps = float(seg["x"])
+            self.y_vel_mps = float(seg["y"])
+            self.theta_vel_degps = float(seg["theta"])
+            self.control_active = True
 
     def queue_once_command(self, cmd: dict[str, Any]) -> None:
         with self._lock:
@@ -109,6 +160,7 @@ class _SharedState:
         self,
     ) -> tuple[float, float, float, float, bool, bool, list[dict[str, Any]], bool, bool, float]:
         with self._lock:
+            self._advance_timed_move_locked(time.time())
             once_cmds = list(self.pending_once_commands)
             self.pending_once_commands.clear()
             do_release = self.release_once
@@ -130,8 +182,12 @@ class _SharedState:
                 float(self.lift_vel_cmd),
             )
 
-    def snapshot(self) -> tuple[float, float, float, float, bool, bool, float, bool, str]:
+    def snapshot(self) -> tuple[float, float, float, float, bool, bool, float, bool, str, bool, int, float]:
         with self._lock:
+            now_s = time.time()
+            queued = len(self.timed_move_queue)
+            timed_active = self.active_timed_move is not None
+            remaining_s = max(self.active_timed_move_end_s - now_s, 0.0) if timed_active else 0.0
             return (
                 float(self.x_vel_mps),
                 float(self.y_vel_mps),
@@ -142,6 +198,9 @@ class _SharedState:
                 float(self.lift_vel_cmd),
                 bool(self.gesture_active),
                 str(self.gesture_last),
+                bool(timed_active),
+                int(queued),
+                float(remaining_s),
             )
 
 
@@ -172,7 +231,7 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             if self.path.rstrip("/") in ("", "/health", "/status"):
-                x, y, th, ts, active, lift_active, lift_vel, gesture_active, gesture_last = state.snapshot()
+                x, y, th, ts, active, lift_active, lift_vel, gesture_active, gesture_last, timed_active, timed_queue_len, timed_remaining_s = state.snapshot()
                 _write_json(
                     self,
                     200,
@@ -183,6 +242,9 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
                         "lift_vel_cmd": lift_vel,
                         "gesture_active": gesture_active,
                         "gesture_last": gesture_last,
+                        "timed_move_active": timed_active,
+                        "timed_move_queue_len": timed_queue_len,
+                        "timed_move_remaining_s": timed_remaining_s,
                         "last_update_s": ts,
                         "control_active": active,
                     },
@@ -211,6 +273,28 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
                 if self.path.rstrip("/") == "/release":
                     state.release_control()
                     _write_json(self, 200, {"ok": True})
+                    return
+
+                if self.path.rstrip("/") == "/move_timed":
+                    data = _parse_json_body(self)
+                    x = float(data.get("x", data.get("x_vel", 0.0)))
+                    y = float(data.get("y", data.get("y_vel", 0.0)))
+                    th = float(data.get("theta", data.get("theta_vel", 0.0)))
+                    duration_s = float(data.get("duration_s", data.get("duration", 0.0)))
+                    if duration_s <= 0:
+                        _write_json(self, 400, {"ok": False, "error": "invalid_duration", "hint": "duration_s must be > 0"})
+                        return
+                    total_pending = state.enqueue_timed_move(x, y, th, duration_s)
+                    _write_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "queued": True,
+                            "pending_segments": int(total_pending),
+                            "segment": {"x": x, "y": y, "theta": th, "duration_s": duration_s},
+                        },
+                    )
                     return
 
                 if self.path.rstrip("/") == "/lift":
@@ -373,7 +457,7 @@ def main() -> int:
     try:
         print(f"Base control API listening on http://{args.http_host}:{args.http_port}")
         print(
-            "Endpoints: GET /health, POST /move, POST /stop, POST /release, POST /lift, POST /audio/play, POST /audio/stop, POST /gesture/greet, POST /gesture/stop"
+            "Endpoints: GET /health, POST /move, POST /move_timed, POST /stop, POST /release, POST /lift, POST /audio/play, POST /audio/stop, POST /gesture/greet, POST /gesture/stop"
         )
         server.serve_forever()
     except KeyboardInterrupt:

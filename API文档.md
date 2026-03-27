@@ -1,6 +1,6 @@
-# AlohaMini 控制 API 文档
+# VoltNest 控制 API 文档
 
-本文档基于当前项目实现，说明如何通过 HTTP API 控制 AlohaMini 的底盘、升降轴以及音频播放。
+本文档基于当前项目实现，说明如何通过 HTTP API 控制 VoltNest 的底盘、升降轴、音频以及手势。
 
 ## 服务概览
 
@@ -51,6 +51,11 @@ curl http://127.0.0.1:8000/health
   },
   "lift_active": true,
   "lift_vel_cmd": 500.0,
+  "gesture_active": false,
+  "gesture_last": "idle",
+  "timed_move_active": false,
+  "timed_move_queue_len": 0,
+  "timed_move_remaining_s": 0.0,
   "last_update_s": 1711111111.11,
   "control_active": true
 }
@@ -77,6 +82,24 @@ curl -X POST http://127.0.0.1:8000/move \
   -H "Content-Type: application/json" \
   -d '{"x":0.2,"y":0,"theta":0}'
 ```
+
+#### `POST /move_timed`
+
+按给定速度移动指定时长，到时自动停止。  
+如果执行中再次收到 `move_timed` 指令，会自动加入队列，当前段执行完成后顺序执行下一段。
+
+```bash
+curl -X POST http://127.0.0.1:8000/move_timed \
+  -H "Content-Type: application/json" \
+  -d '{"x":0.2,"y":0.0,"theta":0.0,"duration_s":2.5}'
+```
+
+参数说明：
+
+- `x` / `x_vel`：前后速度（m/s）
+- `y` / `y_vel`：横移速度（m/s）
+- `theta` / `theta_vel`：旋转角速度（deg/s）
+- `duration_s`（或 `duration`）：执行时长（秒，必须大于 0）
 
 #### `POST /stop`
 
@@ -160,11 +183,38 @@ curl -X POST http://127.0.0.1:8000/audio/play \
 curl -X POST http://127.0.0.1:8000/audio/stop
 ```
 
+---
+
+### 5) 手势控制（双臂镜像打招呼）
+
+#### `POST /gesture/greet`
+
+触发机器人左右臂镜像挥手动作（无需遥操作主臂）。
+
+```bash
+curl -X POST http://127.0.0.1:8000/gesture/greet \
+  -H "Content-Type: application/json" \
+  -d '{"waves":2,"speed_scale":1.0}'
+```
+
+参数说明：
+
+- `waves`：挥手次数，默认 `2`
+- `speed_scale`：动作速度倍率，默认 `1.0`（越大越快）
+
+#### `POST /gesture/stop`
+
+中断当前手势动作。
+
+```bash
+curl -X POST http://127.0.0.1:8000/gesture/stop
+```
+
 ## 音频文件路径规则
 
-Pi 端音频目录固定为：
+Pi 端音频目录默认位于项目根目录下：
 
-`/home/ubuntu/lerobot_alohamini/audio`
+`<项目根目录>/audio`
 
 `/audio/play` 的 `file` 建议使用相对路径（相对于上面的目录）：
 
@@ -178,13 +228,17 @@ Pi 端音频目录固定为：
   - `invalid_json`
   - `missing_file`
   - `invalid_lift_payload`
+  - `invalid_duration`
 - `404`：接口不存在（`not_found`）
 - `500`：服务内部错误
 
 ## 注意事项
 
 - 底盘控制是持续发送机制，未调用 `/stop` 前会保持当前速度。
+- `move_timed` 支持队列执行；执行中收到新定时指令会入队等待。
+- 调用 `/stop` 或 `/release` 会中断并清空定时移动队列。
 - 升降也是持续速度控制，未发送 `{"stop":true}` 前会持续运动。
+- 手势控制在 Pi 端本地执行，不依赖遥操主臂持续输入。
 - 如需把底盘交回键盘控制，请调用 `/release`。
 - 音频播放依赖 `ffplay`（通常来自 `ffmpeg`）。若未安装，播放会失败。
 
