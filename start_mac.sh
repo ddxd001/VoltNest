@@ -137,22 +137,38 @@ fi
 # 启动底盘 HTTP 控制接口（如果启用）
 API_PID=""
 if [ "$ENABLE_BASE_API" = true ]; then
-    echo -e "${YELLOW}🚀 启动底盘 HTTP 控制接口（后台运行）...${NC}"
-    python examples/alohamini/base_control_api.py \
-      --remote_ip "$REMOTE_IP" \
-      --http_host "$API_HTTP_HOST" \
-      --http_port "$API_HTTP_PORT" \
-      > base_control_api.log 2>&1 &
-    API_PID=$!
-    sleep 1
-
-    if ps -p $API_PID > /dev/null 2>&1; then
-        echo -e "${GREEN}✅ 底盘 API 已启动 (PID: $API_PID)${NC}"
+    # 如果已有可用 API，则直接复用；避免重复拉起触发端口冲突
+    if curl --noproxy '*' -fsS "http://$API_HTTP_HOST:$API_HTTP_PORT/health" > /dev/null 2>&1; then
+        echo -e "${GREEN}✅ 检测到已有底盘 API 正在运行，直接复用${NC}"
         echo -e "${GREEN}   接口地址: http://$API_HTTP_HOST:$API_HTTP_PORT${NC}"
-        echo -e "${GREEN}   日志文件: base_control_api.log${NC}"
     else
-        echo -e "${RED}⚠️  底盘 API 启动失败，请检查 base_control_api.log${NC}"
-        API_PID=""
+        # 端口可能被异常进程占用，先尝试清理
+        STALE_PIDS=$(lsof -ti tcp:$API_HTTP_PORT 2>/dev/null || true)
+        if [ -n "$STALE_PIDS" ]; then
+            echo -e "${YELLOW}⚠️  端口 $API_HTTP_PORT 被占用，尝试清理: $STALE_PIDS${NC}"
+            kill -TERM $STALE_PIDS 2>/dev/null || true
+            sleep 1
+        fi
+
+        echo -e "${YELLOW}🚀 启动底盘 HTTP 控制接口（后台运行）...${NC}"
+        python examples/alohamini/base_control_api.py \
+          --remote_ip "$REMOTE_IP" \
+          --http_host "$API_HTTP_HOST" \
+          --http_port "$API_HTTP_PORT" \
+          > base_control_api.log 2>&1 &
+        API_PID=$!
+        sleep 1
+
+        if ps -p $API_PID > /dev/null 2>&1 && curl --noproxy '*' -fsS "http://$API_HTTP_HOST:$API_HTTP_PORT/health" > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ 底盘 API 已启动 (PID: $API_PID)${NC}"
+            echo -e "${GREEN}   接口地址: http://$API_HTTP_HOST:$API_HTTP_PORT${NC}"
+            echo -e "${GREEN}   日志文件: base_control_api.log${NC}"
+            echo -e "${GREEN}   测试命令: curl --noproxy '*' http://$API_HTTP_HOST:$API_HTTP_PORT/health${NC}"
+        else
+            echo -e "${RED}⚠️  底盘 API 启动失败，请检查 base_control_api.log${NC}"
+            echo -e "${YELLOW}提示: 终端代理可能影响本地请求，测试时建议加 --noproxy '*'${NC}"
+            API_PID=""
+        fi
     fi
     echo ""
 fi
