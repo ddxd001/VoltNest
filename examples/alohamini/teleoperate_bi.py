@@ -13,7 +13,7 @@ from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 parser = argparse.ArgumentParser()
 parser.add_argument("--no_robot", action="store_true", help="Do not connect robot, only print actions")
 parser.add_argument("--no_leader", action="store_true", help="Do not connect leader arm, only perform keyboard-controlled actions.")
-parser.add_argument("--fps", type=int, default=12, help="Main loop frequency (frames per second)")
+parser.add_argument("--fps", type=int, default=30, help="Main loop frequency (frames per second)")
 parser.add_argument("--remote_ip", type=str, default="127.0.0.1", help="LeKiwi host IP address")
 
 args = parser.parse_args()

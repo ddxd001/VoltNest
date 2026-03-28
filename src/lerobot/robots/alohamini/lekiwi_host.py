@@ -31,6 +31,12 @@ from pathlib import Path
 from .config_lekiwi import LeKiwiConfig, LeKiwiHostConfig
 from .lekiwi import LeKiwi
 
+# Board-side runtime notes (RZ/G2UL):
+# - This module is the device-side control core process.
+# - Keep this file plus `lekiwi.py`, `config_lekiwi.py`, motor/camera backends and start_pi.sh
+#   when creating a minimal deployment package.
+# - Features such as docs/tests/benchmarks are not runtime prerequisites for this process.
+
 _BASE_KEYS = ("x.vel", "y.vel", "theta.vel")
 _ARB_META_KEYS = ("__source", "__base_claim", "__base_release", "__base_lease_ms", "__base_priority")
 _LEFT_ARM_KEYS = (
@@ -516,6 +522,9 @@ def main():
     last_cmd_time = time.time()
     last_no_cmd_log_time = 0.0
     watchdog_active = False
+    last_gesture_cmd_id: int | None = None
+    last_audio_play_id: int | None = None
+    last_audio_stop_id: int | None = None
     logging.info("Waiting for commands...")
 
     try:
@@ -532,30 +541,42 @@ def main():
                 data = dict(json.loads(msg))
                 data = arbitrator.filter_action(data)
 
+                gesture_cmd_id_raw = data.pop("__gesture_id", None)
+                gesture_cmd_id = int(gesture_cmd_id_raw) if gesture_cmd_id_raw is not None else None
                 gesture_cmd = str(data.pop("__gesture", "")).strip().lower()
                 if gesture_cmd:
-                    if gesture_cmd == "greet":
-                        waves = int(data.pop("__gesture_waves", 2))
-                        speed_scale = float(data.pop("__gesture_speed_scale", 1.0))
-                        ok, message = gesture_controller.start_greet(last_observation, waves=waves, speed_scale=speed_scale)
-                        print(f"[GESTURE] {message}", flush=True)
-                        if not ok:
-                            logging.warning(message)
-                    elif gesture_cmd == "stop":
-                        gesture_controller.stop()
-                        print("[GESTURE] Stopped", flush=True)
+                    if gesture_cmd_id is None or gesture_cmd_id != last_gesture_cmd_id:
+                        if gesture_cmd == "greet":
+                            waves = int(data.pop("__gesture_waves", 2))
+                            speed_scale = float(data.pop("__gesture_speed_scale", 1.0))
+                            ok, message = gesture_controller.start_greet(last_observation, waves=waves, speed_scale=speed_scale)
+                            print(f"[GESTURE] {message}", flush=True)
+                            if not ok:
+                                logging.warning(message)
+                        elif gesture_cmd == "stop":
+                            gesture_controller.stop()
+                            print("[GESTURE] Stopped", flush=True)
+                        last_gesture_cmd_id = gesture_cmd_id
 
+                audio_play_id_raw = data.pop("__audio_play_id", None)
+                audio_stop_id_raw = data.pop("__audio_stop_id", None)
+                audio_play_id = int(audio_play_id_raw) if audio_play_id_raw is not None else None
+                audio_stop_id = int(audio_stop_id_raw) if audio_stop_id_raw is not None else None
                 audio_play_file = data.pop("__audio_play", None)
                 audio_stop = bool(data.pop("__audio_stop", False))
                 if audio_player is not None:
                     if audio_stop:
-                        audio_player.stop()
-                        print("[AUDIO] Stopped", flush=True)
+                        if audio_stop_id is None or audio_stop_id != last_audio_stop_id:
+                            audio_player.stop()
+                            print("[AUDIO] Stopped", flush=True)
+                            last_audio_stop_id = audio_stop_id
                     if audio_play_file:
-                        ok, message = audio_player.play(str(audio_play_file))
-                        print(f"[AUDIO] {message}", flush=True)
-                        if not ok:
-                            logging.warning(message)
+                        if audio_play_id is None or audio_play_id != last_audio_play_id:
+                            ok, message = audio_player.play(str(audio_play_file))
+                            print(f"[AUDIO] {message}", flush=True)
+                            if not ok:
+                                logging.warning(message)
+                            last_audio_play_id = audio_play_id
                 
                 # 检查是否有视频切换命令
                 if video_player:

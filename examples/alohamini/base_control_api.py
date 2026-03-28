@@ -8,6 +8,12 @@ Mac -> (ZMQ PUSH) -> Pi host -> LeKiwi base motors
 Why we need a background sender:
 The Pi host has a watchdog (default ~1.5s). If commands stop arriving, the base is stopped.
 So we continuously publish the latest base velocity command at a fixed rate.
+
+Deployment notes (RZ/G2UL project layout):
+- This API is an upper-computer component; it is usually not deployed on the board.
+- It talks to board-side `lekiwi_host` over ZMQ and should keep send_hz stable.
+- Runtime-minimal dependency chain for this file:
+  examples/alohamini/base_control_api.py -> src/lerobot/robots/alohamini/* (client) -> ZMQ transport.
 """
 
 from __future__ import annotations
@@ -31,6 +37,9 @@ if TYPE_CHECKING:
     from lerobot.robots.alohamini import LeKiwiClient
 
 
+_ONCE_RETRY_CYCLES = 6
+
+
 class _SharedState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -48,6 +57,7 @@ class _SharedState:
         self.control_active: bool = False
         self.release_once: bool = False
         self.pending_once_commands: list[dict[str, Any]] = []
+        self._once_seq: int = 0
         self.gesture_active: bool = False
         self.gesture_last: str = "idle"
 
@@ -125,21 +135,55 @@ class _SharedState:
             self.theta_vel_degps = float(seg["theta"])
             self.control_active = True
 
-    def queue_once_command(self, cmd: dict[str, Any]) -> None:
+    def _next_once_id_locked(self) -> int:
+        self._once_seq += 1
+        return self._once_seq
+
+    def queue_once_command(
+        self, cmd: dict[str, Any], retry_cycles: int = _ONCE_RETRY_CYCLES, id_key: str | None = None
+    ) -> int:
         with self._lock:
-            self.pending_once_commands.append(dict(cmd))
+            cmd_id = self._next_once_id_locked()
+            payload = dict(cmd)
+            if id_key:
+                payload[id_key] = int(cmd_id)
+            self.pending_once_commands.append(
+                {
+                    "cmd": payload,
+                    "retries_left": max(1, int(retry_cycles)),
+                    "cmd_id": int(cmd_id),
+                }
+            )
+            return int(cmd_id)
 
     def queue_gesture_greet(self, waves: int, speed_scale: float) -> None:
         with self._lock:
+            cmd_id = self._next_once_id_locked()
             self.pending_once_commands.append(
-                {"__gesture": "greet", "__gesture_waves": int(waves), "__gesture_speed_scale": float(speed_scale)}
+                {
+                    "cmd": {
+                        "__gesture": "greet",
+                        "__gesture_waves": int(waves),
+                        "__gesture_speed_scale": float(speed_scale),
+                        "__gesture_id": int(cmd_id),
+                    },
+                    "retries_left": _ONCE_RETRY_CYCLES,
+                    "cmd_id": int(cmd_id),
+                }
             )
             self.gesture_active = True
             self.gesture_last = "greet"
 
     def queue_gesture_stop(self) -> None:
         with self._lock:
-            self.pending_once_commands.append({"__gesture": "stop"})
+            cmd_id = self._next_once_id_locked()
+            self.pending_once_commands.append(
+                {
+                    "cmd": {"__gesture": "stop", "__gesture_id": int(cmd_id)},
+                    "retries_left": _ONCE_RETRY_CYCLES,
+                    "cmd_id": int(cmd_id),
+                }
+            )
             self.gesture_active = False
             self.gesture_last = "stop"
 
@@ -161,8 +205,18 @@ class _SharedState:
     ) -> tuple[float, float, float, float, bool, bool, list[dict[str, Any]], bool, bool, float]:
         with self._lock:
             self._advance_timed_move_locked(time.time())
-            once_cmds = list(self.pending_once_commands)
-            self.pending_once_commands.clear()
+            once_cmds: list[dict[str, Any]] = []
+            next_pending_once_commands: list[dict[str, Any]] = []
+            for item in self.pending_once_commands:
+                cmd = dict(item.get("cmd", {}))
+                retries_left = int(item.get("retries_left", 1))
+                if cmd:
+                    once_cmds.append(cmd)
+                retries_left -= 1
+                if retries_left > 0:
+                    item["retries_left"] = retries_left
+                    next_pending_once_commands.append(item)
+            self.pending_once_commands = next_pending_once_commands
             do_release = self.release_once
             if self.release_once:
                 self.release_once = False
@@ -327,13 +381,13 @@ def make_handler(state: _SharedState) -> type[BaseHTTPRequestHandler]:
                     if not file_name:
                         _write_json(self, 400, {"ok": False, "error": "missing_file"})
                         return
-                    state.queue_once_command({"__audio_play": file_name})
-                    _write_json(self, 200, {"ok": True, "file": file_name})
+                    cmd_id = state.queue_once_command({"__audio_play": file_name}, id_key="__audio_play_id")
+                    _write_json(self, 200, {"ok": True, "file": file_name, "cmd_id": int(cmd_id)})
                     return
 
                 if self.path.rstrip("/") == "/audio/stop":
-                    state.queue_once_command({"__audio_stop": True})
-                    _write_json(self, 200, {"ok": True})
+                    cmd_id = state.queue_once_command({"__audio_stop": True}, id_key="__audio_stop_id")
+                    _write_json(self, 200, {"ok": True, "cmd_id": int(cmd_id)})
                     return
 
                 if self.path.rstrip("/") == "/gesture/greet":

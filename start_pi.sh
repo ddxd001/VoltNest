@@ -1,6 +1,10 @@
 #!/bin/bash
-# VoltNest - 树莓派端（从臂端）一键启动脚本
-# 用于启动从臂控制服务
+# VoltNest - Pi/RZ-G2UL 端（从臂端）一键启动脚本
+# 用于启动从臂控制服务。
+# 说明：
+# - 本脚本可直接用于瑞萨 RZ/G2UL Linux 板卡，前提是系统已安装 conda 与串口权限配置完成。
+# - 该脚本是“设备侧主入口”，负责拉起 lekiwi_host（ZMQ 命令接收 + 观测发送）。
+# - 若仅保留核心控制功能，摄像头录制模块可保持关闭（ENABLE_CAMERA_RECORDING=false）。
 
 set -e
 
@@ -154,7 +158,7 @@ echo ""
 echo -e "${GREEN}配置信息：${NC}"
 echo "  - 机械臂类型: so-arm-5dof"
 echo "  - 监听端口: 5555 (命令), 5556 (观测)"
-echo "  - 控制频率: 12 Hz"
+echo "  - 控制频率: 30 Hz"
 echo "  - 看门狗超时: 1500 ms"
 if [ "$ENABLE_CAMERA_RECORDING" = true ] && [ -n "$RECORDER_PID" ]; then
     echo "  - 摄像头录制: 已启用 (PID: $RECORDER_PID)"

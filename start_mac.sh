@@ -1,6 +1,9 @@
 #!/bin/bash
-# VoltNest - Mac 端（遥控端）一键启动脚本
-# 用于启动主臂遥操作程序
+# VoltNest - 上位机端（Mac/Linux）一键启动脚本
+# 用于启动主臂遥操作程序与可选的 HTTP API。
+# 说明：
+# - 在 RZ/G2UL 方案中，该脚本通常运行在“上位机”而不是板端；
+# - 若需要纯板端部署，可不使用本脚本，仅在板端运行 start_pi.sh + host 服务。
 
 set -e
 
@@ -181,7 +184,7 @@ echo -e "${BLUE}================================================${NC}"
 echo ""
 echo -e "${GREEN}配置信息：${NC}"
 echo "  - 远程 IP: $REMOTE_IP"
-echo "  - 控制频率: 12 FPS"
+echo "  - 控制频率: 30 FPS"
 echo "  - 左主臂: $LEFT_PORT"
 echo "  - 右主臂: $RIGHT_PORT"
 if [ "$ENABLE_BASE_API" = true ] && [ -n "$API_PID" ]; then
@@ -224,7 +227,7 @@ trap cleanup EXIT INT TERM
 # 运行遥操作程序
 python examples/alohamini/teleoperate_bi.py \
   --remote_ip $REMOTE_IP \
-  --fps 12
+  --fps 30
 
 # 程序结束
 echo ""
