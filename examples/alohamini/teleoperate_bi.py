@@ -15,12 +15,18 @@ parser.add_argument("--no_robot", action="store_true", help="Do not connect robo
 parser.add_argument("--no_leader", action="store_true", help="Do not connect leader arm, only perform keyboard-controlled actions.")
 parser.add_argument("--fps", type=int, default=30, help="Main loop frequency (frames per second)")
 parser.add_argument("--remote_ip", type=str, default="127.0.0.1", help="LeKiwi host IP address")
+parser.add_argument(
+    "--enable_rerun",
+    action="store_true",
+    help="Enable rerun visualization stream (disabled by default).",
+)
 
 args = parser.parse_args()
 
 NO_ROBOT = args.no_robot
 NO_LEADER = args.no_leader
 FPS = args.fps
+RERUN_ENABLED = args.enable_rerun
 # ========================================== #
 
 if NO_ROBOT:
@@ -55,7 +61,8 @@ keyboard.connect()
 
 
 
-init_rerun(session_name="lekiwi_teleop")
+if RERUN_ENABLED:
+    init_rerun(session_name="lekiwi_teleop")
 
 if not robot.is_connected or not leader.is_connected or not keyboard.is_connected:
     print("⚠️ Warning: Some devices are not connected! Still running for debug.")
@@ -72,7 +79,8 @@ while True:
     lift_action = robot._from_keyboard_to_lift_action(keyboard_keys)
 
     action = {**arm_actions, **base_action, **lift_action}
-    log_rerun_data(observation, action)
+    if RERUN_ENABLED:
+        log_rerun_data(observation, action)
 
     if NO_ROBOT:
         print(f"[NO_ROBOT] action → {action}")
